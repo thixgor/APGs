@@ -17,7 +17,16 @@ const g = globalThis as unknown as { _mongoClientPromise?: Promise<MongoClient> 
 function clientPromise(): Promise<MongoClient> {
   if (!uri) throw new Error("MONGODB_URI não está configurada no servidor.");
   if (!g._mongoClientPromise) {
-    g._mongoClientPromise = new MongoClient(uri).connect();
+    // Fail fast (well under the function's execution limit) instead of hanging
+    // until the platform kills the invocation — e.g. when Atlas's Network
+    // Access list doesn't allow Vercel's IPs, the TCP handshake never
+    // completes. A short timeout turns that into a normal JSON error.
+    const p = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 }).connect();
+    g._mongoClientPromise = p.catch((err) => {
+      // Don't cache a failed connection attempt — let the next request retry.
+      g._mongoClientPromise = undefined;
+      throw err;
+    });
   }
   return g._mongoClientPromise;
 }
