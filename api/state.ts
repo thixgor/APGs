@@ -2,9 +2,9 @@
 // Also doubles as login validation: a 200 means the password was accepted.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getDb } from "./_lib/mongo";
-import { checkAuth } from "./_lib/auth";
-import { docToApg, docToTheme } from "./_lib/shape";
+import { getDb } from "./_lib/mongo.js";
+import { checkAuth } from "./_lib/auth.js";
+import { docToApg, docToTheme } from "./_lib/shape.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!checkAuth(req, res)) return;

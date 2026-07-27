@@ -1,8 +1,8 @@
 // PUT /api/theme — upsert the single shared theme document (meta._id = "theme").
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getDb } from "./_lib/mongo";
-import { checkAuth } from "./_lib/auth";
+import { getDb } from "./_lib/mongo.js";
+import { checkAuth } from "./_lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!checkAuth(req, res)) return;
