@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+_verify.pdf
+.env
+.env.local
+.vercel

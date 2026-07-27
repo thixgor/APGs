@@ -1,0 +1,33 @@
+{
+  "name": "domineaqui-apg-pdf",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "DomineAqui — Gerador de PDF Acadêmico de APGs (Medicina)",
+  "scripts": {
+    "predev": "kill-port 5173 || exit 0",
+    "dev": "vite",
+    "dev:vercel": "vercel dev",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "build:fonts": "node scripts/build-fonts.mjs"
+  },
+  "dependencies": {
+    "mongodb": "^6.10.0",
+    "pdf-lib": "^1.17.1",
+    "pdfmake": "^0.2.10",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/pdfmake": "^0.2.9",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vercel/node": "^3.2.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "kill-port": "^2.0.1",
+    "qrcode": "^1.5.4",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  }
+}
