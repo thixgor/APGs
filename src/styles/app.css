@@ -33,6 +33,9 @@ body {
   font-family: var(--font-sans);
   color: var(--ink);
   background: var(--bg);
+  /* Never let a wide child (a long token, a table) sideways-scroll the shell. */
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
 /* ---------- App shell ---------- */
@@ -40,6 +43,9 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* dvh follows the mobile browser chrome, so the layout doesn't jump (or hide
+     content behind the address bar) as it collapses on scroll. */
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -47,11 +53,34 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 14px 22px;
+  padding-left: max(14px, env(safe-area-inset-left));
+  padding-right: max(14px, env(safe-area-inset-right));
   background: linear-gradient(120deg, var(--green-900), var(--green-700) 60%, var(--green-600));
   color: #eaf6ef;
   box-shadow: var(--shadow);
   z-index: 5;
+}
+
+/* Drawer toggle — only rendered visible on small screens. */
+.nav-toggle {
+  display: none;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  border-radius: 10px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+}
+.nav-backdrop {
+  display: none;
 }
 
 .brand {
@@ -125,6 +154,13 @@ body {
 
 /* ---------- Cards & sections ---------- */
 .section-title {
+  /* Flex (not float) so the trailing counter wraps below the label instead of
+     overlapping it on narrow screens. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 1.2px;
@@ -261,6 +297,9 @@ label.field > span {
 }
 input[type="text"],
 input[type="number"],
+input[type="password"],
+input[type="email"],
+input[type="search"],
 textarea,
 select {
   width: 100%;
@@ -670,6 +709,7 @@ input[type="range"] {
 /* ---------- Boot splash ---------- */
 .boot-splash {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -702,6 +742,7 @@ input[type="range"] {
 /* ---------- Login gate (shared password) ---------- */
 .login-gate {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -1056,4 +1097,237 @@ input[type="range"] {
 .ex-img-warn {
   font-size: 11.5px;
   color: var(--danger);
+}
+
+/* ==========================================================================
+   Responsive — tablet and phone
+   ==========================================================================
+   Up to 900px the sidebar leaves the grid and becomes a slide-in drawer opened
+   by the ☰ button in the top bar; the editor then owns the full width. Below
+   560px the remaining multi-column blocks collapse and every control grows to
+   a comfortable touch size. */
+
+@media (max-width: 900px) {
+  .nav-toggle {
+    display: inline-flex;
+  }
+  .topbar {
+    padding: 10px 14px;
+  }
+  .topbar .brand .mark {
+    width: 34px;
+    height: 34px;
+    font-size: 16px;
+  }
+  .topbar .brand h1 {
+    font-size: 16px;
+  }
+  .topbar .site {
+    display: none;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    position: relative;
+  }
+
+  /* Sidebar as an off-canvas drawer. It slides in *under* the top bar, so the
+     ✕ that closes it stays visible and tappable. */
+  .sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(88vw, 340px);
+    z-index: 4;
+    border-right: 1px solid var(--line);
+    box-shadow: 0 18px 50px rgba(11, 43, 32, 0.28);
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    transform: translateX(-102%);
+    transition: transform 0.25s ease;
+    overscroll-behavior: contain;
+  }
+  .app.nav-open .sidebar {
+    transform: none;
+  }
+  .app.nav-open .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    background: rgba(11, 43, 32, 0.45);
+  }
+
+  .panel {
+    padding: 14px;
+  }
+  .row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .card {
+    padding: 14px;
+    border-radius: 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .row,
+  .color-grid {
+    grid-template-columns: 1fr;
+  }
+  .panel {
+    padding: 12px 12px calc(16px + env(safe-area-inset-bottom));
+  }
+  .card {
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+
+  .brand h1 {
+    font-size: 15px;
+  }
+  .brand .sub {
+    font-size: 10px;
+    letter-spacing: 0.8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 56vw;
+  }
+  /* Buttons sitting in a .row carry a blank label for desktop alignment — it
+     is only dead space once the row is a single column. */
+  .row .field-action > span {
+    display: none;
+  }
+
+  /* 16px keeps iOS from zooming in when a field takes focus. */
+  input[type="text"],
+  input[type="number"],
+  input[type="password"],
+  input[type="email"],
+  input[type="search"],
+  textarea,
+  select {
+    font-size: 16px;
+  }
+  textarea {
+    font-size: 14px;
+  }
+
+  /* Comfortable touch targets. */
+  .btn {
+    min-height: 42px;
+    padding: 10px 14px;
+  }
+  .btn-xs {
+    min-height: 34px;
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+  .chip {
+    min-height: 36px;
+    padding: 7px 13px;
+  }
+  .folder-head {
+    padding: 11px;
+  }
+  .apg-item {
+    padding: 12px;
+  }
+
+  .img-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .img-tile .thumb {
+    height: 78px;
+  }
+
+  /* Editor toolbar: a single scrollable strip beats an eight-row wrap. */
+  .rte-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .rte-toolbar > * {
+    flex: 0 0 auto;
+  }
+  .tbtn {
+    min-width: 36px;
+    height: 36px;
+  }
+  .tselect,
+  .ve-launch {
+    height: 36px;
+  }
+  .ve-launch {
+    margin-left: 4px;
+  }
+
+  /* Exercises: keep the row usable when the actions no longer fit beside it. */
+  .ex-head {
+    flex-wrap: wrap;
+  }
+  .ex-preview {
+    flex: 1 1 100%;
+    order: 3;
+    white-space: normal;
+    overflow: visible;
+  }
+  .ex-actions {
+    margin-left: auto;
+    gap: 4px;
+  }
+  .ex-opt {
+    flex-wrap: wrap;
+  }
+  .ex-opt input[type="text"] {
+    flex: 1 1 100%;
+    order: 3;
+  }
+  .ex-image-row .ex-url {
+    flex: 1 1 100%;
+  }
+
+  /* Dialogs go edge to edge. */
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal {
+    max-height: 92dvh;
+    border-radius: 14px 14px 0 0;
+  }
+  .modal-foot {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  .conflict-choices .conflict-opt {
+    flex: 1 1 auto;
+  }
+
+  .toast {
+    left: 12px;
+    right: 12px;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    transform: none;
+    text-align: center;
+  }
+  .storage-banner {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}
+
+/* Landscape phones: the drawer would otherwise eat the whole viewport. */
+@media (max-width: 900px) and (max-height: 460px) {
+  .sidebar {
+    width: min(70vw, 300px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
 }

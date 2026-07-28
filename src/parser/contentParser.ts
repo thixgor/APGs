@@ -124,19 +124,52 @@ function listItem(rest: string): { ordered: boolean; text: string } | null {
 
 /** Does a line look like a tabular row (TAB- or pipe-delimited, ≥2 cells)? */
 function isDelimRow(line: string): boolean {
-  if (line.includes("\t")) return line.split(/\t+/).filter((c) => c.trim()).length >= 2;
-  if (line.includes("|")) return splitCells(line).length >= 2;
-  return false;
+  if (!line.includes("\t") && !line.includes("|")) return false;
+  const cells = splitCells(line);
+  // At least two cells AND at least two of them with actual text — otherwise a
+  // prose line that merely contains a "|" would be mistaken for a table row.
+  return cells.length >= 2 && cells.filter((c) => c !== "").length >= 2;
 }
 
-/** Split a row into trimmed cells (TAB preferred, then "|"). */
+/**
+ * Split a row into trimmed cells (TAB preferred, then "|").
+ *
+ * Only the OUTER delimiters of a markdown-style row ("| a | b |") are dropped:
+ * empty cells in the middle (or at the start of a row whose first column is
+ * blank, very common in tables copied from the chat) must survive, or every
+ * following cell shifts one column to the left in the PDF.
+ */
 function splitCells(line: string): string[] {
-  const raw = line.includes("\t") ? line.split(/\t+/) : line.split("|");
-  const cells = raw.map((c) => c.trim());
-  // Drop empty leading/trailing cells produced by "| a | b |".
-  while (cells.length && cells[0] === "") cells.shift();
-  while (cells.length && cells[cells.length - 1] === "") cells.pop();
-  return cells;
+  const t = line.trim();
+  if (t.includes("\t")) return t.split("\t").map((c) => c.trim());
+  let s = t;
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+/** The column count shared by most rows (ties resolved toward the first row). */
+function modalColumnCount(rows: string[][]): number {
+  const tally = new Map<number, number>();
+  rows.forEach((r) => tally.set(r.length, (tally.get(r.length) ?? 0) + 1));
+  let best = rows[0].length;
+  let bestN = 0;
+  tally.forEach((n, len) => {
+    if (n > bestN || (n === bestN && len === rows[0].length)) {
+      best = len;
+      bestN = n;
+    }
+  });
+  return Math.max(1, best);
+}
+
+/** Force a row to `cols` cells: pad short rows, and fold the overflow of a long
+ *  row back into its last cell (a stray "|" inside a cell must not add a
+ *  phantom column to the whole table). */
+function fitRow(row: string[], cols: number): string[] {
+  if (row.length === cols) return row;
+  if (row.length < cols) return [...row, ...Array(cols - row.length).fill("")];
+  return [...row.slice(0, cols - 1), row.slice(cols - 1).join(" | ")];
 }
 
 /**
@@ -186,20 +219,69 @@ function rowsFromFence(bodyLines: string[], cols: number | null): string[][] {
   return lines.map((l) => [l.trim()]);
 }
 
+/**
+ * Read the body of a `[tabela]` fence starting at `from`.
+ *
+ * When the closing `[/tabela]` is missing (very easy to lose while pasting) the
+ * fence used to swallow everything down to the end of the text, turning the
+ * whole rest of the APG into one broken table. Now an unclosed fence stops at
+ * the first blank line or at the next structural line (heading, divider,
+ * image, another fence), and the remaining content is parsed normally.
+ *
+ * Returns the body lines plus the index the main loop should continue from.
+ */
+function readFence(lines: string[], from: number): { body: string[]; next: number } {
+  for (let k = from; k < lines.length; k++) {
+    if (RE_TABLE_CLOSE.test(lines[k].trim())) {
+      return { body: lines.slice(from, k), next: k };
+    }
+  }
+  let end = from;
+  while (end < lines.length) {
+    const t = lines[end].trim();
+    if (!t) break;
+    if (
+      RE_BLOCO.test(t) ||
+      RE_PARTE.test(t) ||
+      RE_LEVEL3.test(t) ||
+      RE_LEVEL2.test(t) ||
+      RE_HR.test(t) ||
+      RE_IMAGE.test(t) ||
+      RE_TABLE_OPEN.test(t)
+    ) {
+      break;
+    }
+    end++;
+  }
+  return { body: lines.slice(from, end), next: end - 1 };
+}
+
 function makeTable(title: string | undefined, rows: string[][]): ContentBlock | null {
-  const clean = rows.filter((r) => r.length > 0);
+  // Drop rows that carry no text at all (blank lines inside a fence).
+  const clean = rows.filter((r) => r.length > 0 && r.some((c) => c !== ""));
   if (clean.length === 0) return null;
-  const cols = Math.max(...clean.map((r) => r.length));
-  // Normalize every row to the same column count.
-  const norm = clean.map((r) => {
-    const c = [...r];
-    while (c.length < cols) c.push("");
-    return c;
-  });
+  const cols = modalColumnCount(clean);
+  const norm = clean.map((r) => fitRow(r, cols));
   return { kind: "table", title, header: norm[0], rows: norm.slice(1) };
 }
 
+// The same raw text is parsed several times per export (PDF renders the whole
+// document twice to resolve page numbers, and the editor re-parses on every
+// preview), so recent results are memoized. Callers must treat the returned
+// blocks as read-only — they are shared between calls.
+const CACHE_LIMIT = 24;
+const cache = new Map<string, ContentBlock[]>();
+
 export function parseContent(raw: string): ContentBlock[] {
+  const hit = cache.get(raw);
+  if (hit) return hit;
+  const blocks = parseContentUncached(raw);
+  if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
+  cache.set(raw, blocks);
+  return blocks;
+}
+
+function parseContentUncached(raw: string): ContentBlock[] {
   const lines = raw.split(/\r?\n/);
   const blocks: ContentBlock[] = [];
   let paragraph: string[] = [];
@@ -231,14 +313,10 @@ export function parseContent(raw: string): ContentBlock[] {
       flushParagraph();
       const cols = mOpen[1] ? parseInt(mOpen[1], 10) : null;
       const title = mOpen[2].trim() || undefined;
-      const bodyLines: string[] = [];
-      i++;
-      while (i < lines.length && !RE_TABLE_CLOSE.test(lines[i].trim())) {
-        bodyLines.push(lines[i]);
-        i++;
-      }
-      const tbl = makeTable(title, rowsFromFence(bodyLines, cols));
+      const { body, next } = readFence(lines, i + 1);
+      const tbl = makeTable(title, rowsFromFence(body, cols));
       if (tbl) blocks.push(tbl);
+      i = next;
       continue;
     }
 
@@ -259,14 +337,20 @@ export function parseContent(raw: string): ContentBlock[] {
         if (!RE_SEP_ROW.test(l)) rows.push(splitCells(l));
         j++;
       }
-      if (rows.length >= 2) {
+      // Require a stable shape before promoting plain lines to a table: at
+      // least two rows and a clear majority sharing the same column count.
+      // Prose that happens to contain a "|" or an alignment TAB stays prose.
+      const stable =
+        rows.length >= 2 &&
+        rows.filter((r) => r.length === modalColumnCount(rows)).length >= Math.ceil(rows.length * 0.6);
+      if (stable) {
         flushParagraph();
         const tbl = makeTable(undefined, rows);
         if (tbl) blocks.push(tbl);
         i = j - 1;
         continue;
       }
-      // Only one tabular line — fall through and treat as ordinary text.
+      // Doesn't look like a real table — fall through and treat as ordinary text.
     }
 
     const mImg = line.match(RE_IMAGE);

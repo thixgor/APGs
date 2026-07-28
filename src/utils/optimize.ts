@@ -5,6 +5,7 @@
 // speeds up generation dramatically.
 
 import { APG } from "../state/types";
+import { parseContent } from "../parser/contentParser";
 
 export type ExportMode = "compacto" | "equilibrado" | "alta";
 
@@ -78,35 +79,76 @@ async function optimizeDataUrl(dataUrl: string, cfg: ModeCfg): Promise<string> {
   }
 }
 
+/** Ids of the images actually placed in an APG's body ([[img:…]] blocks). */
+function usedImageIds(apg: APG): Set<string> {
+  const ids = new Set<string>();
+  for (const b of parseContent(apg.conteudoRaw)) {
+    if (b.kind === "image") ids.add(b.imageId);
+  }
+  return ids;
+}
+
+/**
+ * Drop images that no exported document references. An APG often carries
+ * pictures that were uploaded and never placed in the text; recompressing (and
+ * carrying around) megabytes that will not be rendered is pure waste.
+ */
+export function pruneUnusedImages(apgs: APG[]): APG[] {
+  return apgs.map((apg) => {
+    const used = usedImageIds(apg);
+    if (used.size === apg.images.length) return apg;
+    return { ...apg, images: apg.images.filter((i) => used.has(i.id)) };
+  });
+}
+
+/** Run `task` over `items` with a small amount of concurrency. Image decoding
+ *  is asynchronous, so a few in flight cut the wait noticeably; the limit keeps
+ *  memory (full-size bitmaps) bounded. */
+async function mapPool<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await task(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 /**
  * Return a copy of the APGs with every embedded image optimized for the mode.
  * "alta" is a no-op (originals kept). Yields to the event loop between images
  * (await on image load) so the UI can paint a "generating" state.
  */
 export async function optimizeApgs(apgs: APG[], mode: ExportMode): Promise<APG[]> {
-  if (mode === "alta") return apgs;
+  const pruned = pruneUnusedImages(apgs);
+  if (mode === "alta") return pruned;
   const cfg = MODE_CFG[mode];
-  // Cache by source data URL so duplicated images are only re-encoded once.
-  const cache = new Map<string, string>();
+  // Cache by source data URL so duplicated images are only re-encoded once
+  // (the promise is cached, so parallel requests share a single encode).
+  const cache = new Map<string, Promise<string>>();
   const conv = async (d: string | undefined): Promise<string | undefined> => {
     if (!d) return d;
-    const hit = cache.get(d);
-    if (hit !== undefined) return hit;
-    const o = await optimizeDataUrl(d, cfg);
-    cache.set(d, o);
-    return o;
+    let job = cache.get(d);
+    if (!job) {
+      job = optimizeDataUrl(d, cfg);
+      cache.set(d, job);
+    }
+    return job;
   };
 
   const out: APG[] = [];
-  for (const apg of apgs) {
-    const images = [];
-    for (const im of apg.images) {
-      images.push({ ...im, dataUrl: (await conv(im.dataUrl)) as string });
-    }
-    const exercises = [];
-    for (const ex of apg.exercises ?? []) {
-      exercises.push({ ...ex, imageDataUrl: await conv(ex.imageDataUrl) });
-    }
+  for (const apg of pruned) {
+    const images = await mapPool(apg.images, 3, async (im) => ({
+      ...im,
+      dataUrl: (await conv(im.dataUrl)) as string,
+    }));
+    const exercises = await mapPool(apg.exercises ?? [], 3, async (ex) => ({
+      ...ex,
+      imageDataUrl: await conv(ex.imageDataUrl),
+    }));
     out.push({ ...apg, images, exercises });
   }
   return out;

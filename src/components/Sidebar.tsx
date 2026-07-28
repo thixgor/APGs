@@ -8,7 +8,12 @@ import { BackupPanel } from "./BackupPanel";
 
 const EXPANDED_KEY = "domineaqui.sidebar.expanded";
 
-export function Sidebar() {
+interface SidebarProps {
+  /** Called after an action that should dismiss the mobile drawer. */
+  onNavigate?: () => void;
+}
+
+export function Sidebar({ onNavigate }: SidebarProps) {
   const { state, dispatch } = useApp();
   const { apgs, selectedId } = state;
   const selectedPeriodo = apgs.find((a) => a.id === selectedId)?.periodo;
@@ -75,7 +80,10 @@ export function Sidebar() {
                   <div
                     key={a.id}
                     className={`apg-item ${a.id === selectedId ? "active" : ""}`}
-                    onClick={() => dispatch({ type: "SELECT_APG", id: a.id })}
+                    onClick={() => {
+                      dispatch({ type: "SELECT_APG", id: a.id });
+                      onNavigate?.();
+                    }}
                   >
                     <span className="badge">APG {a.numero}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -96,7 +104,10 @@ export function Sidebar() {
       <button
         className="btn btn-primary btn-block"
         style={{ marginTop: 8 }}
-        onClick={() => dispatch({ type: "ADD_APG" })}
+        onClick={() => {
+          dispatch({ type: "ADD_APG" });
+          onNavigate?.();
+        }}
       >
         + Nova APG
       </button>

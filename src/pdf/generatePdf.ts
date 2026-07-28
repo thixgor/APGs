@@ -675,34 +675,128 @@ function framedImage(
   };
 }
 
+// --- Table fitting -----------------------------------------------------------
+//
+// pdfmake sizes "*" columns from the widest word in each one and does NOT clamp
+// the result to the page: a table with many columns (or one long term) simply
+// ran off the right margin and lost its last columns. So we compute explicit
+// point widths that always add up to the text column, shrink the type as the
+// table gets wider, and give very long words break opportunities so they wrap
+// inside their cell instead of pushing the table over the edge.
+
+/** Mean glyph advance as a fraction of the font size (Tinos/Montserrat, ~0.5). */
+const AVG_CHAR_W = 0.5;
+/** Zero-width space — a legal break opportunity present in every embedded font. */
+const ZWSP = "​";
+
+const INLINE_TAG_RE = /\[\/?(?:b|i|u|s|c=[^\]]*|h=[^\]]*|sz=[^\]]*|f=[^\]]*)\]/gi;
+
+/** Cell text without the inline formatting tags — what actually gets measured. */
+function plainCell(s: string): string {
+  return (s ?? "").replace(INLINE_TAG_RE, "");
+}
+
+/** Length of the longest unbreakable run in a cell (drives its minimum width). */
+function longestToken(s: string): number {
+  return plainCell(s)
+    .split(/\s+/)
+    .reduce((m, w) => Math.max(m, w.length), 0);
+}
+
+/** Insert zero-width spaces inside words longer than `max` so they can wrap.
+ *  Cells carrying inline tags are left untouched (the tags must stay intact). */
+function softWrapCell(s: string, max: number): string {
+  if (!s || max < 4) return s;
+  return s
+    .split(/(\s+)/)
+    .map((tok) => {
+      if (tok.length <= max || /[[\]]/.test(tok)) return tok;
+      const parts: string[] = [];
+      for (let i = 0; i < tok.length; i += max) parts.push(tok.slice(i, i + max));
+      return parts.join(ZWSP);
+    })
+    .join("");
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** Point widths for every column, guaranteed to fit `avail` exactly. */
+function columnWidths(rows: string[][], cols: number, avail: number): number[] {
+  // Weight each column by its typical content length (capped so one verbose
+  // column can't starve the others), with a floor so nothing collapses.
+  const weights: number[] = [];
+  for (let c = 0; c < cols; c++) {
+    const lens = rows.map((r) => plainCell(r[c] ?? "").length).sort((a, b) => a - b);
+    const p75 = lens[Math.min(lens.length - 1, Math.floor(lens.length * 0.75))] ?? 1;
+    weights.push(clamp(Math.max(p75, lens[lens.length - 1] * 0.45), 5, 44));
+  }
+  const total = weights.reduce((a, b) => a + b, 0) || cols;
+  const min = Math.min(avail / cols, 34);
+  let widths = weights.map((w) => Math.max(min, (avail * w) / total));
+
+  // Re-normalize: the floors above may have pushed the sum past `avail`, so
+  // trim the surplus from the columns that still have room to give.
+  let sum = widths.reduce((a, b) => a + b, 0);
+  if (sum > avail) {
+    const slack = widths.map((w) => Math.max(0, w - min));
+    const slackTotal = slack.reduce((a, b) => a + b, 0);
+    const excess = sum - avail;
+    widths = slackTotal > 0
+      ? widths.map((w, i) => w - (excess * slack[i]) / slackTotal)
+      : widths.map(() => avail / cols);
+    sum = widths.reduce((a, b) => a + b, 0);
+  }
+  // Hand any rounding remainder to the widest column.
+  const rest = avail - sum;
+  if (Math.abs(rest) > 0.01) {
+    const widest = widths.indexOf(Math.max(...widths));
+    widths[widest] += rest;
+  }
+  return widths;
+}
+
 function renderTable(
   b: { title?: string; header: string[]; rows: string[][] },
   theme: ThemeSettings
 ): Node {
-  const fs = Math.max(8, theme.bodySize - 1.5);
-  const headerCells = b.header.map((h) => ({
-    text: rich(h),
+  const cols = Math.max(1, b.header.length);
+  const all = [b.header, ...b.rows];
+
+  // Wide tables get smaller type and tighter padding so the cells stay legible
+  // once the columns are squeezed into the text column.
+  const base = Math.max(8, theme.bodySize - 1.5);
+  const fs = clamp(base - Math.max(0, cols - 4) * 0.65, 6.5, base);
+  const padX = cols >= 7 ? 3 : cols >= 5 ? 4 : 5;
+  const padY = cols >= 7 ? 3 : 4;
+  const border = 0.5;
+  const avail = Math.max(60, CONTENT_W - cols * 2 * padX - (cols + 1) * border);
+
+  const widths = columnWidths(all, cols, avail);
+  // How many characters fit on one line of each column — anything longer is
+  // given break opportunities so it wraps instead of overflowing.
+  const maxChars = widths.map((w) => Math.max(4, Math.floor(w / (fs * AVG_CHAR_W))));
+  const cell = (c: number, text: string) => softWrapCell(text ?? "", maxChars[c]);
+
+  const headerCells = b.header.map((h, c) => ({
+    text: rich(cell(c, h)),
     fillColor: theme.primary,
     color: "#ffffff",
     bold: true,
     font: "Montserrat",
     fontSize: fs,
-    margin: [5, 5, 5, 5],
     alignment: "left",
   }));
   const bodyRows = b.rows.map((row, ri) =>
-    row.map((cell) => ({
-      text: rich(cell),
+    Array.from({ length: cols }, (_, c) => ({
+      text: rich(cell(c, row[c] ?? "")),
       fillColor: ri % 2 === 0 ? "#ffffff" : "#f1f7f3",
       font: "Tinos",
       fontSize: fs,
       color: theme.text,
       lineHeight: 1.25,
       alignment: "left",
-      margin: [5, 4, 5, 4],
     }))
   );
-  const widths = b.header.map(() => "*");
 
   const stack: Node[] = [];
   if (b.title) {
@@ -716,14 +810,20 @@ function renderTable(
       margin: [0, 0, 0, 6],
     });
   }
+  // NOTE: no `dontBreakRows` — pdfmake renders unbreakable table rows in their
+  // own context and the pages they create come out without the running header.
   stack.push({
     table: { headerRows: 1, widths, body: [headerCells, ...bodyRows] },
     layout: {
       hLineWidth: (i: number, node: any) =>
-        i === 0 || i === 1 || i === node.table.body.length ? 0.9 : 0.5,
-      vLineWidth: () => 0.5,
+        i === 0 || i === 1 || i === node.table.body.length ? 0.9 : border,
+      vLineWidth: () => border,
       hLineColor: (i: number) => (i === 1 ? theme.primary : "#cdd9d2"),
       vLineColor: () => "#cdd9d2",
+      paddingLeft: () => padX,
+      paddingRight: () => padX,
+      paddingTop: (i: number) => (i === 0 ? padY + 1 : padY),
+      paddingBottom: (i: number) => (i === 0 ? padY + 1 : padY),
     },
   });
 
@@ -1651,14 +1751,20 @@ function renderToBuffer(def: TDocumentDefinitions): Promise<Uint8Array> {
 /** Render to bytes with the per-APG running headers. Two passes, each with a
  *  FRESH def object sharing one header context: pass 1 populates the page map;
  *  pass 2 draws the headers. (Reusing a single def across passes corrupts
- *  pdfmake's canvas layout — it mutates content nodes during render.) */
+ *  pdfmake's canvas layout — it mutates content nodes during render.)
+ *
+ *  When pass 1 finds no header markers at all — the "Resumo de Objetivos"
+ *  export, or a document without APG sections — the second pass would render
+ *  byte-for-byte the same document, so it is skipped and the export takes half
+ *  the time. */
 async function getPdfBytes(
   apgs: APG[],
   theme: ThemeSettings,
   opts: DocOptions
 ): Promise<Uint8Array> {
   const ctx = makeHeaderCtx();
-  await renderToBuffer(buildDocDefinition(apgs, theme, opts, ctx)); // pass 1: populate ctx
+  const first = await renderToBuffer(buildDocDefinition(apgs, theme, opts, ctx));
+  if (ctx.runHeaders.length === 0) return first;
   return renderToBuffer(buildDocDefinition(apgs, theme, opts, ctx)); // pass 2: draw headers
 }
 
@@ -1706,8 +1812,11 @@ async function produce(
   layout: LayoutMode,
   extras: ExportExtras
 ): Promise<Uint8Array> {
-  // Objectives-only export renders no images, so skip the (costly) recompress.
-  const optimized = extras.objectivesOnly ? apgs : await optimizeApgs(apgs, mode);
+  // Objectives-only export renders no images, so skip the (costly) recompress
+  // — and drop the image payload entirely so pdfmake has less to walk through.
+  const optimized = extras.objectivesOnly
+    ? apgs.map((a) => ({ ...a, images: [], exercises: [] }))
+    : await optimizeApgs(apgs, mode);
   const bytes = await getPdfBytes(optimized, theme, {
     generalExercises: extras.generalExercises,
     objectivesOnly: extras.objectivesOnly,

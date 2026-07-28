@@ -227,6 +227,21 @@ function cellText(el: HTMLElement): string {
   return oneLine(inlineToTags(el).replace(/\|/g, "/"));
 }
 
+/** Block-level tags handled explicitly by the serializer. */
+const BLOCK_TAGS = new Set([
+  "H1", "H2", "H3", "HR", "UL", "OL", "FIGURE", "TABLE", "P", "DIV", "SECTION", "ARTICLE",
+  "BLOCKQUOTE", "MAIN", "BODY",
+]);
+
+/** Does this element merely wrap other blocks (so it must be descended into
+ *  rather than flattened)? A pasted table nested inside a <div> used to be
+ *  serialized as one run-on paragraph — every cell glued together — which is
+ *  exactly how tables came out scrambled in the PDF. */
+function isWrapper(el: HTMLElement): boolean {
+  if (!/^(P|DIV|SECTION|ARTICLE|BLOCKQUOTE|MAIN)$/.test(el.tagName)) return false;
+  return Array.from(el.children).some((c) => BLOCK_TAGS.has(c.tagName) || !!(c as HTMLElement).dataset?.imgId);
+}
+
 /** Serialize the editor's root element back to tag-based raw text. */
 export function htmlToRaw(root: HTMLElement): string {
   const lines: string[] = [];
@@ -235,7 +250,8 @@ export function htmlToRaw(root: HTMLElement): string {
   let sub = 0;
   let subsub = 0;
 
-  root.childNodes.forEach((node) => {
+  const walkBlocks = (parent: Node): void => {
+  parent.childNodes.forEach((node) => {
     if (node.nodeType === Node.TEXT_NODE) {
       const t = (node.textContent || "").trim();
       if (t) lines.push(t);
@@ -245,7 +261,9 @@ export function htmlToRaw(root: HTMLElement): string {
     const el = node as HTMLElement;
     const tag = el.tagName;
 
-    if (tag === "H1") {
+    if (isWrapper(el)) {
+      walkBlocks(el);
+    } else if (tag === "H1") {
       part += 1;
       sub = 0;
       subsub = 0;
@@ -285,17 +303,18 @@ export function htmlToRaw(root: HTMLElement): string {
     } else if (tag === "TABLE") {
       const caption = el.querySelector(":scope > caption");
       const title = caption ? oneLine(inlineToTags(caption)) : "";
+      const rows = tableRows(el);
+      // A blank line before the fence: without it a table pasted right after a
+      // paragraph would be appended to that paragraph's text on re-parse.
+      lines.push("");
       lines.push(`[tabela]${title ? ` ${title}` : ""}`);
-      el.querySelectorAll("tr").forEach((tr) => {
-        const cells = Array.from(tr.querySelectorAll("th,td")).map((c) =>
-          cellText(c as HTMLElement)
-        );
-        if (cells.some((c) => c)) lines.push(cells.join(" | "));
-      });
+      // Rows are written fenced ("| a | b |") so a cell that is empty — first
+      // column included — keeps its place when the row is split again.
+      rows.forEach((cells) => lines.push(`| ${cells.join(" | ")} |`));
       lines.push("[/tabela]");
       lines.push("");
     } else {
-      // P, DIV or anything else -> paragraph. Internal <br> become \n (hard
+      // P or anything else -> paragraph. Internal <br> become \n (hard
       // breaks); a blank line after keeps separate paragraphs separate.
       const text = inlineToTags(el).replace(/\n[ \t]+/g, "\n").trim();
       if (text) {
@@ -304,7 +323,47 @@ export function htmlToRaw(root: HTMLElement): string {
       }
     }
   });
+  };
+
+  walkBlocks(root);
 
   // Collapse 3+ blank lines and trim trailing whitespace.
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Rows of a table as aligned cell arrays.
+ *
+ * Merged cells (colspan/rowspan, which pasted tables are full of) can't be
+ * expressed in the flat `a | b | c` format, so they're expanded into real
+ * cells: a colspan repeats as empty cells to its right, a rowspan reserves the
+ * slot on the rows below. Without this every row after a merge shifted one
+ * column to the left and the whole table came out misaligned.
+ */
+function tableRows(table: HTMLElement): string[][] {
+  const trs = Array.from(table.querySelectorAll("tr"));
+  const grid: string[][] = trs.map(() => []);
+  // Slots occupied by a rowspan coming from an earlier row: "row:col" -> true.
+  const taken = new Set<string>();
+
+  trs.forEach((tr, r) => {
+    let c = 0;
+    Array.from(tr.querySelectorAll(":scope > th, :scope > td")).forEach((node) => {
+      const cellEl = node as HTMLTableCellElement;
+      while (taken.has(`${r}:${c}`)) c++;
+      const colSpan = Math.max(1, Math.min(20, cellEl.colSpan || 1));
+      const rowSpan = Math.max(1, Math.min(50, cellEl.rowSpan || 1));
+      const text = cellText(cellEl);
+      for (let i = 0; i < colSpan; i++) {
+        grid[r][c + i] = i === 0 ? text : "";
+        for (let j = 1; j < rowSpan; j++) taken.add(`${r + j}:${c + i}`);
+      }
+      c += colSpan;
+    });
+  });
+
+  const cols = grid.reduce((m, row) => Math.max(m, row.length), 0);
+  return grid
+    .map((row) => Array.from({ length: cols }, (_, i) => row[i] ?? ""))
+    .filter((row) => row.some((c) => c));
 }

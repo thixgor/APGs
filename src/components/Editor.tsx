@@ -108,7 +108,7 @@ export function Editor() {
               }
             />
           </label>
-          <label className="field">
+          <label className="field field-action">
             <span>&nbsp;</span>
             <button
               className="btn btn-ghost btn-block"
@@ -118,7 +118,7 @@ export function Editor() {
               ⬆ Exportar esta APG
             </button>
           </label>
-          <label className="field">
+          <label className="field field-action">
             <span>&nbsp;</span>
             <button
               className="btn btn-ghost btn-block"
@@ -128,7 +128,7 @@ export function Editor() {
               ⬇ Baixar este APG (HTML)
             </button>
           </label>
-          <label className="field">
+          <label className="field field-action">
             <span>&nbsp;</span>
             <button
               className="btn btn-danger btn-block"

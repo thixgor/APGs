@@ -32,7 +32,22 @@ const RE_ESPECIFICOS = /^objetivos?\s+espec[ií]ficos\s*[:.]?\s*$/i;
 // before storing so it renders as "1.1.".
 const RE_NUMBERED = /^(\d+(?:\.\d+)+\.?|\d+[.)])\s+(.+)$/;
 
+// Memoized like parseContent: the objectives of every APG are parsed once per
+// export pass (and again by the editor's live counters). Results are shared, so
+// callers must treat them as read-only.
+const CACHE_LIMIT = 24;
+const cache = new Map<string, ObjectiveGeneral[]>();
+
 export function parseObjectives(raw: string): ObjectiveGeneral[] {
+  const hit = cache.get(raw);
+  if (hit) return hit;
+  const parsed = parseObjectivesUncached(raw);
+  if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
+  cache.set(raw, parsed);
+  return parsed;
+}
+
+function parseObjectivesUncached(raw: string): ObjectiveGeneral[] {
   const lines = raw.split(/\r?\n/);
   const generals: ObjectiveGeneral[] = [];
 

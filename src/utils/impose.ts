@@ -15,8 +15,10 @@ const SHEET_H = 595.28;
 export async function impose2up(bytes: Uint8Array): Promise<Uint8Array> {
   const src = await PDFDocument.load(bytes);
   const out = await PDFDocument.create();
-  // Embed every source page as a reusable XObject (vector, lossless).
-  const embedded = await out.embedPdf(bytes, src.getPageIndices());
+  // Embed every source page as a reusable XObject (vector, lossless). The
+  // already-parsed document is reused here — handing the raw bytes over would
+  // make pdf-lib parse the whole file a second time.
+  const embedded = await out.embedPdf(src, src.getPageIndices());
 
   const halfW = SHEET_W / 2;
   for (let i = 0; i < embedded.length; i += 2) {
