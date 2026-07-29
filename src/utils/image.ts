@@ -12,6 +12,19 @@ import { APGImage } from "../state/types";
 const MAX_DIM = 1600;
 const JPEG_QUALITY = 0.82;
 
+// Hard ceiling per stored image. Each image is uploaded in its own request, and
+// a serverless function refuses a body over ~4.5 MB, so an image that lands
+// above this is re-encoded smaller instead of becoming an APG that can never be
+// saved. Ladder of (max dimension, quality) fallbacks, tried in order.
+const MAX_IMAGE_CHARS = 1_200_000;
+const FALLBACKS: [number, number][] = [
+  [1600, 0.7],
+  [1400, 0.65],
+  [1200, 0.6],
+  [1000, 0.5],
+  [800, 0.45],
+];
+
 interface Compressed {
   dataUrl: string;
   width: number;
@@ -40,31 +53,47 @@ function compressDataUrl(
         resolve({ dataUrl: srcDataUrl, width: 0, height: 0 });
         return;
       }
-      const scale = Math.min(1, maxDim / Math.max(w, h));
-      const tw = Math.max(1, Math.round(w * scale));
-      const th = Math.max(1, Math.round(h * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = tw;
-      canvas.height = th;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
+
+      /** Draw at `dim` and encode at `q`; null when the canvas is unusable. */
+      const render = (dim: number, q: number): Compressed | null => {
+        const scale = Math.min(1, dim / Math.max(w, h));
+        const tw = Math.max(1, Math.round(w * scale));
+        const th = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = tw;
+        canvas.height = th;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        // JPEG has no alpha — flatten onto white so transparent PNGs don't go black.
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, tw, th);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, tw, th);
+        try {
+          return { dataUrl: canvas.toDataURL("image/jpeg", q), width: tw, height: th };
+        } catch {
+          return null;
+        }
+      };
+
+      const first = render(maxDim, quality);
+      if (!first) {
         resolve({ dataUrl: srcDataUrl, width: w, height: h });
         return;
       }
-      // JPEG has no alpha — flatten onto white so transparent PNGs don't go black.
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, tw, th);
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(img, 0, 0, tw, th);
-      let out = srcDataUrl;
-      try {
-        const jpeg = canvas.toDataURL("image/jpeg", quality);
-        if (jpeg.length < srcDataUrl.length) out = jpeg;
-      } catch {
-        /* keep original */
+      // Never grow the input…
+      let best: Compressed =
+        first.dataUrl.length < srcDataUrl.length
+          ? first
+          : { dataUrl: srcDataUrl, width: first.width, height: first.height };
+      // …and never leave it above the per-image ceiling.
+      for (const [dim, q] of FALLBACKS) {
+        if (best.dataUrl.length <= MAX_IMAGE_CHARS) break;
+        const next = render(dim, q);
+        if (next && next.dataUrl.length < best.dataUrl.length) best = next;
       }
-      resolve({ dataUrl: out, width: tw, height: th });
+      resolve(best);
     };
     img.src = srcDataUrl;
   });

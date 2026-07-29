@@ -7,9 +7,19 @@
 // to one PC. Sync model:
 //   - Each APG is saved INDEPENDENTLY (debounced) → editing different APGs never
 //     clobbers each other; on the same APG, last write wins (agreed trade-off).
-//   - A poll every few seconds pulls the peer's changes. APGs with an unsaved
-//     local edit ("dirty") are never overwritten by the poll — so your typing is
-//     safe until it's saved, then the server copy takes over.
+//   - A poll every few seconds reads only the MANIFEST (one id + timestamp per
+//     APG) and re-downloads just the APGs whose timestamp moved. It used to pull
+//     the entire acervo — images included — every 7 s, which grew past what a
+//     serverless response may carry and made every request fail with a 500.
+//   - APGs with an unsaved local edit ("dirty") are never overwritten by the
+//     poll — so your typing is safe until it's saved, then the server copy
+//     takes over.
+//
+// "Has this APG changed?" is answered by OBJECT IDENTITY, not by comparing
+// serialized copies: the reducer only builds a new object for the APG it
+// touches, so `serverCopy.get(id) !== apg` is both exact and instant. The old
+// JSON.stringify-everything comparison had to walk every base64 image on every
+// keystroke and on every poll, which is what made the editor freeze.
 
 import React, {
   createContext,
@@ -23,9 +33,11 @@ import React, {
 import { APG, APGImage, DEFAULT_THEME, ThemeSettings } from "./types";
 import {
   AuthError,
-  RemoteState,
+  LoadProgress,
+  Manifest,
   deleteApgRemote,
-  fetchState,
+  fetchApgs,
+  fetchManifest,
   getPassword,
   saveApg,
   saveTheme,
@@ -227,7 +239,15 @@ interface Ctx {
 
 const AppContext = createContext<Ctx | null>(null);
 
-function BootSplash({ error, onRetry }: { error?: string | null; onRetry?: () => void }) {
+function BootSplash({
+  error,
+  onRetry,
+  progress,
+}: {
+  error?: string | null;
+  onRetry?: () => void;
+  progress?: LoadProgress | null;
+}) {
   return (
     <div className="boot-splash">
       <div className="boot-mark">D</div>
@@ -242,7 +262,12 @@ function BootSplash({ error, onRetry }: { error?: string | null; onRetry?: () =>
           )}
         </>
       ) : (
-        <div>Carregando o acervo compartilhado…</div>
+        <div>
+          Carregando o acervo compartilhado…
+          {progress && progress.total > 0 && (
+            <> ({progress.loaded}/{progress.total} imagens)</>
+          )}
+        </div>
       )}
     </div>
   );
@@ -254,6 +279,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [online, setOnline] = useState(true);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [bootErr, setBootErr] = useState<string | null>(null);
+  const [bootProgress, setBootProgress] = useState<LoadProgress | null>(null);
 
   // Latest values, readable from timers/intervals without stale closures.
   const latestApgs = useRef<APG[]>(state.apgs);
@@ -262,7 +288,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   latestTheme.current = state.theme;
 
   // Sync bookkeeping.
-  const lastSaved = useRef<Map<string, string>>(new Map()); // id → last server JSON
+  // id → the exact APG object the server currently holds. Identity comparison
+  // against it is what detects local edits (see the header note).
+  const serverCopy = useRef<Map<string, APG>>(new Map());
+  // id → server `updatedAt`, so the poll can tell "a peer changed this" from
+  // "this is the write I just made".
+  const knownUpdatedAt = useRef<Map<string, number>>(new Map());
   const lastTheme = useRef<string>("");
   const dirty = useRef<Set<string>>(new Set()); // ids with an unsaved local edit
   const themeDirty = useRef(false);
@@ -276,19 +307,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const toGate = useCallback(() => {
     setPassword(null);
     canPersist.current = false;
-    lastSaved.current.clear();
+    serverCopy.current.clear();
+    knownUpdatedAt.current.clear();
     dirty.current.clear();
     setPhase("gate");
   }, []);
 
   // --- Initial load ---------------------------------------------------------
+  // Manifest first (tiny), then the APGs themselves in bounded batches, so the
+  // acervo can grow without any single response outgrowing the platform limit.
   const boot = useCallback(async () => {
     setBootErr(null);
+    setBootProgress(null);
     try {
-      const remote = await fetchState();
-      const apgs = remote.apgs.map(loadedApg);
-      const theme = { ...DEFAULT_THEME, ...(remote.theme ?? {}) };
-      lastSaved.current = new Map(apgs.map((a) => [a.id, JSON.stringify(a)]));
+      const manifest = await fetchManifest();
+      const order = manifest.apgs.map((a) => a.id);
+      const loaded = await fetchApgs(order, setBootProgress);
+      const byId = new Map(loaded.map((a) => [a.id, loadedApg(a)]));
+      const apgs = order.map((id) => byId.get(id)).filter((a): a is APG => !!a);
+      const theme = { ...DEFAULT_THEME, ...(manifest.theme ?? {}) };
+
+      serverCopy.current = new Map(apgs.map((a) => [a.id, a]));
+      knownUpdatedAt.current = new Map(
+        manifest.apgs.filter((m) => byId.has(m.id)).map((m) => [m.id, m.updatedAt])
+      );
       lastTheme.current = JSON.stringify(theme);
       dirty.current.clear();
       themeDirty.current = false;
@@ -322,13 +364,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           dirty.current.delete(id);
           return;
         }
-        const json = JSON.stringify(apg);
         saveApg(apg).then(
-          () => {
-            lastSaved.current.set(id, json);
+          (updatedAt) => {
+            serverCopy.current.set(id, apg);
+            knownUpdatedAt.current.set(id, updatedAt);
             // Clear dirty only if nothing changed again while saving.
-            const now = latestApgs.current.find((a) => a.id === id);
-            if (now && JSON.stringify(now) === json) dirty.current.delete(id);
+            if (latestApgs.current.find((a) => a.id === id) === apg) dirty.current.delete(id);
             setOnline(true);
             setSyncError(null);
           },
@@ -353,9 +394,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const curIds = new Set(current.map((a) => a.id));
 
     // Deletions: was tracked, now gone locally.
-    for (const id of Array.from(lastSaved.current.keys())) {
+    for (const id of Array.from(serverCopy.current.keys())) {
       if (!curIds.has(id)) {
-        lastSaved.current.delete(id);
+        serverCopy.current.delete(id);
+        knownUpdatedAt.current.delete(id);
         dirty.current.delete(id);
         if (saveTimers.current.has(id)) {
           window.clearTimeout(saveTimers.current.get(id)!);
@@ -377,9 +419,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // Upserts: new or changed since last server sync.
+    // Upserts: new or changed since last server sync. The reducer preserves the
+    // object of every APG it didn't touch, so this identity check is exact.
     for (const a of current) {
-      if (lastSaved.current.get(a.id) !== JSON.stringify(a)) {
+      if (serverCopy.current.get(a.id) !== a) {
         dirty.current.add(a.id);
         scheduleSave(a.id);
       }
@@ -413,10 +456,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [state.theme, phase, toGate]);
 
   // --- Poll the server and merge peer changes ------------------------------
-  const mergeRemote = useCallback((remote: RemoteState) => {
+  const mergeRemote = useCallback((remoteApgs: APG[], remoteTheme: Manifest["theme"]) => {
     const local = latestApgs.current;
     const localById = new Map(local.map((a) => [a.id, a]));
-    const remoteById = new Map(remote.apgs.map((a) => [a.id, loadedApg(a)]));
+    const remoteById = new Map(remoteApgs.map((a) => [a.id, a]));
     const resultById = new Map<string, APG>();
 
     // Server is the source of truth, EXCEPT for APGs with unsaved local edits.
@@ -425,15 +468,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         resultById.set(id, localById.get(id) ?? rem);
       } else {
         resultById.set(id, rem);
-        lastSaved.current.set(id, JSON.stringify(rem)); // adopted → not dirty
+        serverCopy.current.set(id, rem); // adopted → not dirty
       }
     }
     // Local APGs the server doesn't have.
     for (const [id, loc] of localById) {
       if (remoteById.has(id)) continue;
-      if (lastSaved.current.has(id)) {
+      if (serverCopy.current.has(id)) {
         // Existed before, gone from server ⇒ deleted by the peer → drop it.
-        lastSaved.current.delete(id);
+        serverCopy.current.delete(id);
+        knownUpdatedAt.current.delete(id);
         dirty.current.delete(id);
       } else {
         // Brand-new local APG not yet saved → keep it.
@@ -447,13 +491,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     for (const id of resultById.keys()) if (!orderedIds.includes(id)) orderedIds.push(id);
     const apgs = orderedIds.map((id) => resultById.get(id)!);
 
-    if (JSON.stringify(apgs) !== JSON.stringify(local)) {
-      dispatch({ type: "SET_APGS", apgs });
-    }
+    const changed =
+      apgs.length !== local.length || apgs.some((a, i) => a !== local[i]);
+    if (changed) dispatch({ type: "SET_APGS", apgs });
 
     // Theme (don't clobber an in-progress local theme edit).
-    if (remote.theme && !themeDirty.current) {
-      const t = { ...DEFAULT_THEME, ...remote.theme };
+    if (remoteTheme && !themeDirty.current) {
+      const t = { ...DEFAULT_THEME, ...remoteTheme };
       const tj = JSON.stringify(t);
       if (tj !== JSON.stringify(latestTheme.current)) {
         lastTheme.current = tj;
@@ -464,15 +508,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (phase !== "ready") return;
+    let running = false;
+
     const iv = window.setInterval(async () => {
+      // A slow round (a peer just uploaded images) must not stack up requests.
+      if (running) return;
+      running = true;
       try {
-        const remote = await fetchState();
+        const manifest = await fetchManifest();
+
+        // Only APGs whose server timestamp moved need downloading; ones we're
+        // still editing are skipped entirely (the local copy wins anyway).
+        const stale = manifest.apgs
+          .filter((m) => !dirty.current.has(m.id))
+          .filter(
+            (m) =>
+              !serverCopy.current.has(m.id) || knownUpdatedAt.current.get(m.id) !== m.updatedAt
+          )
+          .map((m) => m.id);
+
+        const before = new Map(knownUpdatedAt.current);
+        const fetched = stale.length > 0 ? await fetchApgs(stale) : [];
+        const freshById = new Map<string, APG>();
+        for (const a of fetched) {
+          // A save of ours that landed while this round was downloading is
+          // newer than what we just read — don't let the poll undo it.
+          if (knownUpdatedAt.current.get(a.id) !== before.get(a.id)) continue;
+          freshById.set(a.id, loadedApg(a));
+        }
+        for (const m of manifest.apgs) {
+          if (freshById.has(m.id)) knownUpdatedAt.current.set(m.id, m.updatedAt);
+        }
+
+        // Rebuild the server's view: freshly fetched, else the copy we already
+        // hold, else (still editing it) our local one.
+        const remoteApgs: APG[] = [];
+        for (const m of manifest.apgs) {
+          const a =
+            freshById.get(m.id) ??
+            serverCopy.current.get(m.id) ??
+            (dirty.current.has(m.id)
+              ? latestApgs.current.find((x) => x.id === m.id)
+              : undefined);
+          if (a) remoteApgs.push(a);
+        }
+
         setOnline(true);
         setSyncError(null);
-        mergeRemote(remote);
+        mergeRemote(remoteApgs, manifest.theme);
       } catch (e) {
         if (e instanceof AuthError) toGate();
         else setOnline(false);
+      } finally {
+        running = false;
       }
     }, POLL_MS);
     return () => window.clearInterval(iv);
@@ -484,7 +572,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return <LoginGate onAuthed={() => setPhase("loading")} />;
   }
   if (phase === "loading") {
-    return <BootSplash error={bootErr} onRetry={bootErr ? boot : undefined} />;
+    return (
+      <BootSplash
+        error={bootErr}
+        onRetry={bootErr ? boot : undefined}
+        progress={bootProgress}
+      />
+    );
   }
 
   return (
