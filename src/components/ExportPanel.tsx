@@ -5,16 +5,14 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../state/store";
 import { useToast } from "./Toast";
-import {
-  generateConsolidated,
-  generateByPeriodo,
-  generateObjectives,
-  generateObjectivesByPeriodo,
-  openPdf,
-  LayoutMode,
-} from "../pdf/generatePdf";
-import { downloadHtmlBook, downloadHtmlByPeriodo } from "../html/generateHtml";
+// The PDF engine carries ~2.7 MB of embedded fonts. Loading it with the page
+// made every visit wait for something most sessions never use, so it is pulled
+// in only when an export actually runs (and quietly prefetched while idle).
+import type { LayoutMode } from "../pdf/generatePdf";
 import { ExportMode, MODE_LABEL } from "../utils/optimize";
+
+const pdfLib = () => import("../pdf/generatePdf");
+const htmlLib = () => import("../html/generateHtml");
 
 const MODE_KEY = "domineaqui.export.mode";
 const LAYOUT_KEY = "domineaqui.export.layout";
@@ -35,7 +33,7 @@ const LAYOUTS: { id: LayoutMode; label: string; hint: string }[] = [
 ];
 
 export function ExportPanel() {
-  const { state } = useApp();
+  const { state, ensureImagesLoaded } = useApp();
   const notify = useToast();
   const { apgs, theme } = state;
 
@@ -104,16 +102,47 @@ export function ExportPanel() {
   const extras = { generalExercises: generalEx };
   const objExtras = { includeTemas };
 
+  // Warm the export chunk in the background so the first click is instant.
+  useEffect(() => {
+    const warm = () => {
+      pdfLib().catch(() => {});
+      htmlLib().catch(() => {});
+    };
+    const ric = (window as any).requestIdleCallback as
+      | ((cb: () => void, o?: { timeout: number }) => number)
+      | undefined;
+    const h = ric ? ric(warm, { timeout: 4000 }) : window.setTimeout(warm, 2500);
+    return () => {
+      if (ric && (window as any).cancelIdleCallback) (window as any).cancelIdleCallback(h);
+      else window.clearTimeout(h);
+    };
+  }, []);
+
   const [busy, setBusy] = useState<string>("");
   const periodos = [...new Set(apgs.map((a) => a.periodo))].sort((x, y) => x - y);
   const disabled = apgs.length === 0 || !!busy;
 
   // Run an async export with a visible busy state. The 20ms yield lets React
   // paint "Gerando…" before pdfmake's synchronous build briefly blocks the UI.
-  const run = async (label: string, fn: () => Promise<void>, done: string) => {
+  //
+  // Pictures are downloaded on demand, so an export first makes sure the ones it
+  // needs are actually in memory — a PDF with silently missing figures would be
+  // worse than a few seconds of waiting.
+  const run = async (
+    label: string,
+    fn: () => Promise<void>,
+    done: string,
+    needsImages = true
+  ) => {
     setBusy(label);
     try {
       await new Promise((r) => setTimeout(r, 20));
+      if (needsImages) {
+        setBusy("Baixando imagens…");
+        await ensureImagesLoaded();
+        setBusy(label);
+        await new Promise((r) => setTimeout(r, 20));
+      }
       await fn();
       notify(done);
     } catch (e) {
@@ -185,7 +214,7 @@ export function ExportPanel() {
             className="btn btn-primary btn-block"
             disabled={disabled}
             onClick={() =>
-              run("Gerando…", () => generateConsolidated(apgs, theme, mode, layout, extras), "PDF consolidado gerado.")
+              run("Gerando…", async () => (await pdfLib()).generateConsolidated(apgs, theme, mode, layout, extras), "PDF consolidado gerado.")
             }
           >
             {busy ? `⏳ ${busy}` : "⬇ Baixar PDF consolidado"}
@@ -194,7 +223,7 @@ export function ExportPanel() {
             className="btn btn-ghost btn-block"
             disabled={disabled}
             onClick={() =>
-              run("Gerando…", () => openPdf(apgs, theme, mode, layout, extras), "Abrindo PDF em nova aba…")
+              run("Gerando…", async () => (await pdfLib()).openPdf(apgs, theme, mode, layout, extras), "Abrindo PDF em nova aba…")
             }
           >
             ↗ Abrir em nova aba
@@ -215,7 +244,7 @@ export function ExportPanel() {
                   onClick={() =>
                     run(
                       "Gerando…",
-                      () => generateByPeriodo(apgs, p, theme, mode, layout, extras),
+                      async () => (await pdfLib()).generateByPeriodo(apgs, p, theme, mode, layout, extras),
                       `PDF do período ${p} gerado.`
                     )
                   }
@@ -257,8 +286,9 @@ export function ExportPanel() {
             onClick={() =>
               run(
                 "Gerando…",
-                () => generateObjectives(apgs, theme, mode, layout, objExtras),
-                "Resumo de objetivos gerado."
+                async () => (await pdfLib()).generateObjectives(apgs, theme, mode, layout, objExtras),
+                "Resumo de objetivos gerado.",
+                false // objectives-only: no figures involved
               )
             }
           >
@@ -280,8 +310,9 @@ export function ExportPanel() {
                   onClick={() =>
                     run(
                       "Gerando…",
-                      () => generateObjectivesByPeriodo(apgs, p, theme, mode, layout, objExtras),
-                      `Resumo do período ${p} gerado.`
+                      async () => (await pdfLib()).generateObjectivesByPeriodo(apgs, p, theme, mode, layout, objExtras),
+                      `Resumo do período ${p} gerado.`,
+                      false // objectives-only: no figures involved
                     )
                   }
                 >
@@ -310,7 +341,7 @@ export function ExportPanel() {
             className="btn btn-primary btn-block"
             disabled={disabled}
             onClick={() =>
-              run("Gerando…", () => downloadHtmlBook(apgs, theme, mode), "Caderno interativo (HTML) gerado.")
+              run("Gerando…", async () => (await htmlLib()).downloadHtmlBook(apgs, theme, mode), "Caderno interativo (HTML) gerado.")
             }
           >
             {busy ? `⏳ ${busy}` : "⬇ Baixar caderno (HTML)"}
@@ -319,7 +350,7 @@ export function ExportPanel() {
             className="btn btn-ghost btn-block"
             disabled={disabled}
             onClick={() =>
-              run("Gerando…", () => downloadHtmlBook(apgs, theme, mode, {}, "open"), "Abrindo material em nova aba…")
+              run("Gerando…", async () => (await htmlLib()).downloadHtmlBook(apgs, theme, mode, {}, "open"), "Abrindo material em nova aba…")
             }
           >
             ↗ Abrir em nova aba
@@ -340,7 +371,7 @@ export function ExportPanel() {
                   onClick={() =>
                     run(
                       "Gerando…",
-                      () => downloadHtmlByPeriodo(apgs, p, theme, mode),
+                      async () => (await htmlLib()).downloadHtmlByPeriodo(apgs, p, theme, mode),
                       `Material do período ${p} gerado.`
                     )
                   }

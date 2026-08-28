@@ -5,6 +5,7 @@
 // engine renders — so everything round-trips and persists safely.
 import React, { useEffect, useRef, useState } from "react";
 import { APGImage } from "../state/types";
+import { useApp } from "../state/store";
 import { VisualEditor } from "./VisualEditor";
 
 const SYMBOLS = [
@@ -26,6 +27,10 @@ const TABLE_FLAT_TEMPLATE = `[tabela:2] Título da tabela
 COLE-AQUI-O-TEXTO-ACHATADO-DA-TABELA
 [/tabela]`;
 
+// How long typing pauses before the text reaches the store. Short enough that
+// nothing feels "unsaved", long enough not to re-parse on every keystroke.
+const COMMIT_MS = 350;
+
 interface Props {
   value: string;
   onChange: (v: string) => void;
@@ -35,8 +40,10 @@ interface Props {
 }
 
 export function ContentField({ value, onChange, images, apgId, placeholder }: Props) {
+  const { ensureImagesLoaded } = useApp();
   const ref = useRef<HTMLTextAreaElement>(null);
   const [visual, setVisual] = useState(false);
+  const [opening, setOpening] = useState(false);
 
   // Last caret/selection in the textarea. Tracked continuously so a toolbar
   // action (image/symbol dropdown, color swatch) inserts where the user was —
@@ -48,20 +55,32 @@ export function ContentField({ value, onChange, images, apgId, placeholder }: Pr
     if (ta) selRef.current = { start: ta.selectionStart, end: ta.selectionEnd };
   };
 
-  // Local copy decouples keystrokes from the global store so that pdfmake
-  // (inside Preview) doesn't regenerate on every character. The store (and
-  // therefore the live preview) only updates after 1 s of idle typing.
+  // A local copy decouples keystrokes from the global store, so typing doesn't
+  // re-run the parsers on every character. It is committed on a short debounce,
+  // on blur, and — crucially — when this editor goes away.
   const [localValue, setLocalValue] = useState(value);
   const localRef = useRef(value);       // always holds latest local value
   const debounceTimer = useRef<number>();
   const isDirty = useRef(false);        // true while debounce is pending
   const onChangeRef = useRef(onChange); // always up-to-date
-  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 
-  // Sync from the store when it changes externally (APG switch or visual editor
+  // The APG this instance belongs to, captured together with its onChange.
+  // Editor mounts one ContentField per APG (keyed by id), so a pending edit can
+  // never be flushed into a different APG — which is exactly what used to
+  // happen when you switched APG mid-sentence: the text you had just typed was
+  // written onto the APG you clicked.
+  const ownerId = useRef(apgId);
+
+  useEffect(() => {
+    if (apgId === ownerId.current) {
+      onChangeRef.current = onChange;
+    }
+  });
+
+  // Sync from the store when it changes externally (peer edit, visual editor
   // save) — but never overwrite a pending local edit.
   useEffect(() => {
-    if (!isDirty.current) {
+    if (!isDirty.current && value !== localRef.current) {
       localRef.current = value;
       setLocalValue(value);
     }
@@ -77,16 +96,26 @@ export function ContentField({ value, onChange, images, apgId, placeholder }: Pr
     setLocalValue(v);
     isDirty.current = true;
     window.clearTimeout(debounceTimer.current);
-    debounceTimer.current = window.setTimeout(() => commitToStore(localRef.current), 1000);
+    debounceTimer.current = window.setTimeout(() => commitToStore(localRef.current), COMMIT_MS);
   };
 
-  /** Flush any pending debounce immediately (called before opening the visual editor). */
+  /** Flush any pending debounce immediately. */
   const flushNow = () => {
-    if (isDirty.current) {
-      window.clearTimeout(debounceTimer.current);
-      commitToStore(localRef.current);
-    }
+    window.clearTimeout(debounceTimer.current);
+    if (isDirty.current) commitToStore(localRef.current);
   };
+
+  // Never leave an edit behind: unmounting (switching APG, closing the editor)
+  // commits what is in the buffer, to the APG it actually belongs to.
+  useEffect(() => {
+    return () => {
+      window.clearTimeout(debounceTimer.current);
+      if (isDirty.current) {
+        isDirty.current = false;
+        onChangeRef.current(localRef.current);
+      }
+    };
+  }, []);
 
   /** Replace the current selection, optionally wrapping it. */
   const surround = (before: string, after = "") => {
@@ -220,9 +249,21 @@ export function ContentField({ value, onChange, images, apgId, placeholder }: Pr
           type="button"
           className="ve-launch"
           title="Abrir editor visual em tela cheia (Word/Canva)"
-          onClick={() => { flushNow(); setVisual(true); }}
+          onClick={async () => {
+            flushNow();
+            // The visual editor renders the figures inline, so they have to be
+            // downloaded before it opens (they load on demand).
+            setOpening(true);
+            try {
+              await ensureImagesLoaded([apgId]);
+            } catch {
+              /* open anyway: a missing figure is still editable as a block */
+            }
+            setOpening(false);
+            setVisual(true);
+          }}
         >
-          ✦ Editor Visual
+          {opening ? "⏳ Abrindo…" : "✦ Editor Visual"}
         </button>
       </div>
 
@@ -238,7 +279,10 @@ export function ContentField({ value, onChange, images, apgId, placeholder }: Pr
         onSelect={rememberSel}
         onKeyUp={rememberSel}
         onMouseUp={rememberSel}
-        onBlur={rememberSel}
+        onBlur={() => {
+          rememberSel();
+          flushNow();
+        }}
       />
 
       {visual && (

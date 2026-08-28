@@ -6,19 +6,43 @@ import { useApp } from "./state/store";
 import { BRAND } from "./state/types";
 
 function SyncBanner() {
-  const { online, syncError } = useApp();
-  if (online && !syncError) return null;
+  const { sync } = useApp();
+  const { online, error, pending, loadingImages } = sync;
+
+  // Everything landed and nothing is loading: no banner at all.
+  if (online && !error && pending === 0 && loadingImages === 0) return null;
+
+  if (!online) {
+    return (
+      <div className="storage-banner">
+        ⚠ Sem conexão com o servidor. Tudo o que você escrever fica guardado{" "}
+        <strong>aqui no computador</strong> e sobe sozinho assim que a conexão voltar — nada
+        se perde, mesmo se você fechar a aba.
+        {pending > 0 && <> ({pending} pendente{pending > 1 ? "s" : ""})</>}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="storage-banner">
+        ⚠ Erro ao sincronizar: {error} Tentando de novo automaticamente
+        {pending > 0 && <> · {pending} item(ns) ainda não salvo(s)</>}.
+      </div>
+    );
+  }
+
+  if (loadingImages > 0) {
+    return (
+      <div className="storage-banner subtle">
+        ⏳ Carregando {loadingImages} imagem(ns) do acervo…
+      </div>
+    );
+  }
+
   return (
-    <div className="storage-banner">
-      {online ? (
-        <>⚠ Um erro ocorreu ao sincronizar: {syncError}. Tentando novamente…</>
-      ) : (
-        <>
-          ⚠ Sem conexão com o servidor. Suas edições estão sendo guardadas na tela e serão
-          enviadas assim que a conexão voltar — <strong>não feche a aba</strong> até
-          reconectar.
-        </>
-      )}
+    <div className="storage-banner subtle">
+      💾 Salvando {pending} alteração(ões)…
     </div>
   );
 }

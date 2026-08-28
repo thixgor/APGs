@@ -19,6 +19,9 @@ const SYMBOLS = [
   "π", "σ", "Ω", "√", "∞", "∴", "↑", "↓",
 ];
 
+// How long after an edit the page is written back to the APG.
+const AUTOSAVE_MS = 900;
+
 const SIZES = [9, 10, 11, 12, 14, 16, 18, 24];
 const FONTS = [
   { key: "Tinos", label: "Tinos (serifa)" },
@@ -74,11 +77,47 @@ export function VisualEditor({ value, onChange, images, apgId, onClose }: Props)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- serialize back to raw (only on close) ----
-  const flush = useCallback(() => {
-    const el = editorRef.current;
-    if (el) onChange(htmlToRaw(el));
+  // ---- serialize back to raw ----
+  // Autosaved while you write, not only when you press "Concluir". Closing the
+  // tab (or a crash) in the middle of a long session used to throw the whole
+  // session away, because nothing had been committed yet.
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
   }, [onChange]);
+
+  const autoTimer = useRef<number>();
+  const pending = useRef(false);
+
+  const flush = useCallback(() => {
+    window.clearTimeout(autoTimer.current);
+    const el = editorRef.current;
+    if (!el) return;
+    pending.current = false;
+    onChangeRef.current(htmlToRaw(el));
+  }, []);
+
+  /** Called on every edit of the page: commit shortly after typing stops. */
+  const touch = useCallback(() => {
+    pending.current = true;
+    window.clearTimeout(autoTimer.current);
+    autoTimer.current = window.setTimeout(flush, AUTOSAVE_MS);
+  }, [flush]);
+
+  // Commit on unmount and when the tab goes away, so no edit is ever stranded.
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden" && pending.current) flush();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", flush);
+      window.clearTimeout(autoTimer.current);
+      if (pending.current) flush();
+    };
+  }, [flush]);
 
   const refreshState = useCallback(() => {
     const q = (c: string) => {
@@ -122,6 +161,7 @@ export function VisualEditor({ value, onChange, images, apgId, onClose }: Props)
       /* ignore unsupported */
     }
     refreshState();
+    touch();
   };
 
   /** Wrap the current selection in a styled span (undoable via insertHTML). */
@@ -141,6 +181,7 @@ export function VisualEditor({ value, onChange, images, apgId, onClose }: Props)
     } catch {
       /* ignore */
     }
+    touch();
   };
 
   /** Apply a block-level style (line spacing) to the selection's blocks. */
@@ -154,6 +195,7 @@ export function VisualEditor({ value, onChange, images, apgId, onClose }: Props)
       const el = node as HTMLElement;
       if (el.nodeType === Node.ELEMENT_NODE && /^(P|DIV|H1|H2|H3|LI|UL|OL)$/.test(el.tagName)) {
         el.style.lineHeight = lh;
+        touch();
         break;
       }
       node = node.parentNode;
@@ -168,6 +210,7 @@ export function VisualEditor({ value, onChange, images, apgId, onClose }: Props)
     } catch {
       /* ignore */
     }
+    touch();
   };
 
   const figureHtml = (img: APGImage) =>
@@ -224,12 +267,14 @@ export function VisualEditor({ value, onChange, images, apgId, onClose }: Props)
     if (!selFig) return;
     selFig.setAttribute(attr, val);
     setSelFig(selFig); // re-render toolbar state
+    touch();
   };
 
   const removeFigure = () => {
     if (!selFig) return;
     selFig.remove();
     setSelFig(null);
+    touch();
   };
 
   // ---- paste sanitization ----
@@ -243,6 +288,7 @@ export function VisualEditor({ value, onChange, images, apgId, onClose }: Props)
     } else {
       document.execCommand("insertText", false, text);
     }
+    touch();
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -396,6 +442,7 @@ export function VisualEditor({ value, onChange, images, apgId, onClose }: Props)
           suppressContentEditableWarning
           spellCheck
           onClick={onEditorClick}
+          onInput={touch}
           onPaste={onPaste}
           onKeyDown={onKeyDown}
           onDrop={onDrop}

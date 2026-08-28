@@ -28,15 +28,23 @@ export type ContentBlock =
   | { kind: "image"; imageId: string; caption?: string; align?: BlockAlign; width?: "small" | "medium" | "full" }
   | { kind: "table"; title?: string; header: string[]; rows: string[][] };
 
-/** An uploaded image, stored as a data URL so it survives serialization. */
+/** An uploaded image.
+ *
+ *  `dataUrl` is the picture itself, kept in memory (and in the local IndexedDB
+ *  cache) so the PDF/HTML pipelines can embed it. It is NOT what travels to the
+ *  server with the APG: the picture is stored as its own document and this
+ *  object carries only `rev`, the content revision that points at it. An image
+ *  whose `dataUrl` is empty simply has not been downloaded yet. */
 export interface APGImage {
   id: string; // e.g. "img1"
-  dataUrl: string; // "data:image/png;base64,..."
+  dataUrl: string; // "data:image/png;base64,..." ("" until loaded)
   /** Default caption; can be overridden inline in the content token. */
   caption?: string;
   /** Natural pixel dimensions, used to keep aspect ratio in the PDF. */
   width: number;
   height: number;
+  /** Content revision of `dataUrl` (see state/blobs.ts). */
+  rev?: string;
 }
 
 /** Kind of an exercise: multiple-choice (objetiva) or open/essay (discursiva). */
@@ -59,8 +67,11 @@ export interface Exercise {
   answer: string;
   /** Resposta comentada — shown in the answer key (both kinds). */
   explanation: string;
-  /** Resolved data URL the PDF embeds (from upload or a fetched URL). */
+  /** Resolved data URL the PDF embeds (from upload or a fetched URL).
+   *  Like APGImage.dataUrl it is stored apart from the APG document. */
   imageDataUrl?: string;
+  /** Content revision of `imageDataUrl` (see state/blobs.ts). */
+  imageRev?: string;
   /** Original URL, kept for markdown round-trip. */
   imageUrl?: string;
   imageCaption?: string;

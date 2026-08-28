@@ -43,7 +43,9 @@ export function ImageManager({ apg }: { apg: APG }) {
       <p className="hint" style={{ marginTop: 0 }}>
         Envie imagens e insira o <code>token</code> em qualquer linha do conteúdo
         para posicioná-las. Ex.: <code>[[img:img1]]</code> ou com legenda{" "}
-        <code>[[img:img1|Pulmões em corte]]</code>.
+        <code>[[img:img1|Pulmões em corte]]</code>. Cada imagem é guardada
+        separadamente no servidor e fica em cache no seu navegador — por isso não
+        se perdem mais.
       </p>
 
       <input
@@ -62,11 +64,18 @@ export function ImageManager({ apg }: { apg: APG }) {
         <div className="img-grid" style={{ marginTop: 12 }}>
           {apg.images.map((img) => (
             <div key={img.id} className="img-tile">
-              <div
-                className="thumb"
-                style={{ backgroundImage: `url(${img.dataUrl})` }}
-                title={`${img.width}×${img.height}px`}
-              />
+              {img.dataUrl ? (
+                <div
+                  className="thumb"
+                  style={{ backgroundImage: `url(${img.dataUrl})` }}
+                  title={`${img.width}×${img.height}px`}
+                />
+              ) : (
+                // Pictures load on demand; this one hasn't arrived yet.
+                <div className="thumb thumb-loading" title="Baixando a imagem…">
+                  ⏳
+                </div>
+              )}
               <div className="meta">
                 <span
                   className="tok"

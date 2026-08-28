@@ -70,7 +70,8 @@ export function ExerciseManager({ apg }: { apg: APG }) {
     [commitNow]
   );
 
-  // Re-sync when the selected APG changes (flush any pending edit first).
+  // Re-sync when the selected APG changes (flushing any pending edit into the
+  // APG it belongs to first — never into the one just clicked).
   useEffect(() => {
     if (apg.id !== apgIdRef.current) {
       if (dirty.current) {
@@ -81,6 +82,13 @@ export function ExerciseManager({ apg }: { apg: APG }) {
       draftRef.current = apg.exercises;
       setDraft(apg.exercises);
       setSelected(new Set());
+      return;
+    }
+    // Same APG, but the list changed underneath us (a peer's edit, or a picture
+    // that finished downloading). Adopt it unless we have unsaved typing.
+    if (!dirty.current && apg.exercises !== draftRef.current) {
+      draftRef.current = apg.exercises;
+      setDraft(apg.exercises);
     }
   }, [apg.id, apg.exercises, commitNow]);
 
@@ -196,29 +204,43 @@ export function ExerciseManager({ apg }: { apg: APG }) {
     if (!file) return;
     try {
       const dataUrl = await fileToDataUrl(file);
-      patchEx(id, { imageDataUrl: dataUrl, imageUrl: undefined }, true);
+      patchEx(id, { imageDataUrl: dataUrl, imageUrl: undefined, imageRev: undefined }, true);
     } catch (e) {
       notify((e as Error).message, "error");
     }
   };
+  /** Store what was typed right away (no need to click outside). */
+  const onUrlChange = (id: string, url: string) => {
+    const clean = url.trim();
+    patchEx(id, { imageUrl: clean || undefined });
+  };
+
+  /** Then, once the field is left, actually download and embed the picture. */
   const onUrlBlur = async (id: string, url: string) => {
     const clean = url.trim();
+    const ex = draftRef.current.find((e) => e.id === id);
     patchEx(id, { imageUrl: clean || undefined }, true);
     if (!clean) {
-      patchEx(id, { imageDataUrl: undefined }, true);
+      patchEx(id, { imageDataUrl: undefined, imageRev: undefined }, true);
       return;
     }
+    // Already embedded from this very URL — nothing to re-download.
+    if (ex?.imageDataUrl && ex.imageUrl === clean) return;
     try {
       const dataUrl = await urlToDataUrl(clean);
-      patchEx(id, { imageDataUrl: dataUrl, imageUrl: clean }, true);
+      patchEx(id, { imageDataUrl: dataUrl, imageUrl: clean, imageRev: undefined }, true);
       notify("Imagem da URL baixada e embutida.");
     } catch (e) {
-      patchEx(id, { imageDataUrl: undefined }, true);
+      patchEx(id, { imageDataUrl: undefined, imageRev: undefined }, true);
       notify(`URL salva, mas a imagem não pôde ser embutida: ${(e as Error).message}`, "error");
     }
   };
   const clearImage = (id: string) =>
-    patchEx(id, { imageDataUrl: undefined, imageUrl: undefined, imageCaption: undefined }, true);
+    patchEx(
+      id,
+      { imageDataUrl: undefined, imageUrl: undefined, imageCaption: undefined, imageRev: undefined },
+      true
+    );
 
   // ---- import / export ----
   const doImport = (mode: "append" | "replace") => {
@@ -244,7 +266,9 @@ export function ExerciseManager({ apg }: { apg: APG }) {
           const dataUrl = await urlToDataUrl(ex.imageUrl);
           // patch by id against the latest draft
           apply(
-            draftRef.current.map((e) => (e.id === ex.id ? { ...e, imageDataUrl: dataUrl } : e)),
+            draftRef.current.map((e) =>
+              e.id === ex.id ? { ...e, imageDataUrl: dataUrl, imageRev: undefined } : e
+            ),
             true
           );
         } catch {
@@ -351,6 +375,7 @@ export function ExerciseManager({ apg }: { apg: APG }) {
             onAddOption={() => addOption(ex.id)}
             onRemoveOption={(oi) => removeOption(ex.id, oi)}
             onUpload={(file) => onUpload(ex.id, file)}
+            onUrlChange={(url) => onUrlChange(ex.id, url)}
             onUrlBlur={(url) => onUrlBlur(ex.id, url)}
             onClearImage={() => clearImage(ex.id)}
             onDuplicate={() => duplicateOne(ex.id)}
@@ -386,6 +411,7 @@ interface RowProps {
   onAddOption: () => void;
   onRemoveOption: (oi: number) => void;
   onUpload: (file: File | undefined) => void;
+  onUrlChange: (url: string) => void;
   onUrlBlur: (url: string) => void;
   onClearImage: () => void;
   onDuplicate: () => void;
@@ -466,7 +492,8 @@ function ExerciseRow(p: RowProps) {
               type="text"
               className="ex-url"
               placeholder="ou cole a URL da imagem"
-              defaultValue={ex.imageUrl ?? ""}
+              value={ex.imageUrl ?? ""}
+              onChange={(e) => p.onUrlChange(e.target.value)}
               onBlur={(e) => p.onUrlBlur(e.target.value)}
             />
             {(ex.imageDataUrl || ex.imageUrl) && (

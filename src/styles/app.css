@@ -604,6 +604,22 @@ input[type="range"] {
   line-height: 1.4;
   z-index: 6;
 }
+.thumb-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: #7a8c83;
+  background: repeating-linear-gradient(45deg, #f2f6f4, #f2f6f4 8px, #e9efec 8px, #e9efec 16px);
+}
+
+/* Informational variant: work in progress, not a problem. */
+.storage-banner.subtle {
+  background: #eef7f1;
+  color: var(--green-800, #1b4332);
+  border-bottom: 1px solid #cfe6d9;
+  font-weight: 600;
+}
 .banner-btn {
   background: #b00020;
   color: #fff;

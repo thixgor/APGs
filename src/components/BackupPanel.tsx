@@ -22,18 +22,29 @@ import {
 type AutoStatus = "off" | "active" | "needs-permission";
 
 export function BackupPanel() {
-  const { state, dispatch } = useApp();
+  const { state, dispatch, ensureImagesLoaded } = useApp();
   const notify = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
+  const [exporting, setExporting] = useState(false);
 
   // ---- manual export / import ----
-  const onExport = () => {
+  // A backup file has to be complete, so the pictures (downloaded on demand)
+  // are pulled in first — a "backup" missing its figures is worse than none.
+  const onExport = async () => {
     if (state.apgs.length === 0) {
       notify("Nenhuma APG para exportar.", "error");
       return;
     }
-    exportApgsFile(state.apgs, state.theme);
-    notify(`${state.apgs.length} APG(s) exportada(s) para arquivo.`);
+    setExporting(true);
+    try {
+      await ensureImagesLoaded();
+      exportApgsFile(state.apgs, state.theme);
+      notify(`${state.apgs.length} APG(s) exportada(s) para arquivo.`);
+    } catch (e) {
+      notify((e as Error).message, "error");
+    } finally {
+      setExporting(false);
+    }
   };
 
   const [importing, setImporting] = useState<unknown[] | null>(null);
@@ -100,13 +111,14 @@ export function BackupPanel() {
         setStatus("needs-permission");
         return;
       }
+      await ensureImagesLoaded();
       await writeBackup(h, state.apgs, state.theme);
       setLastAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
       setStatus("active");
     } catch {
       setStatus("needs-permission");
     }
-  }, [state.apgs, state.theme]);
+  }, [state.apgs, state.theme, ensureImagesLoaded]);
 
   // Auto-write (debounced) whenever the data changes and a folder is active.
   useEffect(() => {
@@ -122,6 +134,7 @@ export function BackupPanel() {
       handleRef.current = h;
       setFolder(dirName(h));
       setStatus("active");
+      await ensureImagesLoaded();
       await writeBackup(h, state.apgs, state.theme);
       setLastAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
       notify(`Backup automático ativado na pasta "${dirName(h)}".`);
@@ -155,8 +168,8 @@ export function BackupPanel() {
       <div className="section-title">Backup / Compartilhar</div>
       <div className="card">
         <div className="export-actions">
-          <button className="btn btn-ghost btn-block" onClick={onExport}>
-            ⬆ Exportar APGs (arquivo)
+          <button className="btn btn-ghost btn-block" disabled={exporting} onClick={onExport}>
+            {exporting ? "⏳ Preparando…" : "⬆ Exportar APGs (arquivo)"}
           </button>
           <button className="btn btn-ghost btn-block" onClick={() => fileRef.current?.click()}>
             ⬇ Importar APGs (arquivo)
@@ -224,8 +237,9 @@ export function BackupPanel() {
         )}
 
         <p className="hint" style={{ marginTop: 8 }}>
-          Suas APGs ficam guardadas no banco de dados do navegador (IndexedDB) — robusto e sem
-          o limite que apagava dados. Ainda assim, mantenha um backup em pasta ou arquivo.
+          Suas APGs ficam no acervo compartilhado (servidor) e também em uma cópia local no
+          navegador, que segura tudo — imagens incluídas — se a internet cair. Ainda assim,
+          mantenha um backup em pasta ou arquivo.
         </p>
       </div>
 

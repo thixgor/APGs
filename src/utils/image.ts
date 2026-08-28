@@ -1,16 +1,25 @@
-// Reads an uploaded image File into an APGImage (data URL + natural size).
-// Images are downscaled/recompressed on the way in so a few photos don't blow
-// the localStorage quota — which previously caused saves to fail silently and
-// images to "disappear" after a reload.
+// Turning an uploaded file into a picture the app can store.
+//
+// Every picture is downscaled and recompressed on the way in, to a hard byte
+// budget. That budget is what makes saving predictable: pictures now travel to
+// the server one request each, and staying comfortably under the platform's
+// body limit is what stops a save (and with it, the picture) from being lost.
+// Quality is chosen adaptively — the encoder only drops quality as far as it
+// has to in order to fit.
 
 import { APGImage } from "../state/types";
+import { revOf } from "../state/blobs";
 
-// Stored-image budget. Kept moderate so a whole caderno (dozens of APGs with
-// images) stays small enough to ALWAYS save reliably — a too-large store was
-// failing to write and causing data loss. 1600px @ q0.82 is still crisp for
-// screen and print; the PDF export modes can shrink further on output.
+// Longest side, in pixels. 1600px is still crisp at A4 print width; the export
+// modes can shrink further on output.
 const MAX_DIM = 1600;
-const JPEG_QUALITY = 0.82;
+// Quality ladder: the first step that fits the budget wins.
+const QUALITY_STEPS = [0.85, 0.78, 0.7, 0.62, 0.55];
+// Byte budget per picture (data-URL characters ≈ bytes). ~700 KB keeps even an
+// APG full of figures far below every limit in the pipeline.
+const MAX_BYTES = 700_000;
+// Last resort when even the lowest quality doesn't fit: shrink and try again.
+const FALLBACK_DIM = 1100;
 
 interface Compressed {
   dataUrl: string;
@@ -18,56 +27,78 @@ interface Compressed {
   height: number;
 }
 
-/** Downscale + recompress a data URL via canvas. Falls back to the original on
- *  any failure, and never produces something larger than the input. */
-function compressDataUrl(
-  srcDataUrl: string,
-  maxDim = MAX_DIM,
-  quality = JPEG_QUALITY
-): Promise<Compressed> {
+function loadImage(src: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
-    // SVGs are vector + tiny; don't rasterize them.
-    if (srcDataUrl.startsWith("data:image/svg")) {
-      resolve({ dataUrl: srcDataUrl, width: 0, height: 0 });
-      return;
-    }
     const img = new Image();
-    img.onerror = () => resolve({ dataUrl: "", width: 0, height: 0 });
-    img.onload = () => {
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
-      if (!w || !h) {
-        resolve({ dataUrl: srcDataUrl, width: 0, height: 0 });
-        return;
-      }
-      const scale = Math.min(1, maxDim / Math.max(w, h));
-      const tw = Math.max(1, Math.round(w * scale));
-      const th = Math.max(1, Math.round(h * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = tw;
-      canvas.height = th;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        resolve({ dataUrl: srcDataUrl, width: w, height: h });
-        return;
-      }
-      // JPEG has no alpha — flatten onto white so transparent PNGs don't go black.
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, tw, th);
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(img, 0, 0, tw, th);
-      let out = srcDataUrl;
-      try {
-        const jpeg = canvas.toDataURL("image/jpeg", quality);
-        if (jpeg.length < srcDataUrl.length) out = jpeg;
-      } catch {
-        /* keep original */
-      }
-      resolve({ dataUrl: out, width: tw, height: th });
-    };
-    img.src = srcDataUrl;
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
   });
+}
+
+function draw(img: HTMLImageElement, maxDim: number): HTMLCanvasElement | null {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (!w || !h) return null;
+  const scale = Math.min(1, maxDim / Math.max(w, h));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  // JPEG has no alpha — flatten onto white so transparent PNGs don't go black.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+/**
+ * Downscale + recompress a data URL, stopping at the first quality that fits
+ * the byte budget. Falls back to the original on any failure, and never
+ * produces something larger than the input.
+ */
+async function compressDataUrl(srcDataUrl: string): Promise<Compressed> {
+  // SVGs are vector + tiny; don't rasterize them.
+  if (srcDataUrl.startsWith("data:image/svg")) {
+    return { dataUrl: srcDataUrl, width: 0, height: 0 };
+  }
+  const img = await loadImage(srcDataUrl);
+  if (!img) return { dataUrl: "", width: 0, height: 0 };
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (!w || !h) return { dataUrl: srcDataUrl, width: 0, height: 0 };
+
+  const attempt = (maxDim: number): Compressed | null => {
+    const canvas = draw(img, maxDim);
+    if (!canvas) return null;
+    let best: string | null = null;
+    for (const q of QUALITY_STEPS) {
+      let out: string;
+      try {
+        out = canvas.toDataURL("image/jpeg", q);
+      } catch {
+        return null;
+      }
+      best = out;
+      if (out.length <= MAX_BYTES) break;
+    }
+    return best ? { dataUrl: best, width: canvas.width, height: canvas.height } : null;
+  };
+
+  let result = attempt(MAX_DIM);
+  if (result && result.dataUrl.length > MAX_BYTES) {
+    // Still too heavy at the lowest quality → give up some resolution instead.
+    result = attempt(FALLBACK_DIM) ?? result;
+  }
+  if (!result) return { dataUrl: srcDataUrl, width: w, height: h };
+  // Never make a picture bigger than it already was.
+  if (result.dataUrl.length >= srcDataUrl.length) {
+    return { dataUrl: srcDataUrl, width: w, height: h };
+  }
+  return result;
 }
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -84,7 +115,14 @@ export async function fileToImage(file: File, id: string): Promise<APGImage> {
   const raw = await readAsDataUrl(file);
   const c = await compressDataUrl(raw);
   if (!c.dataUrl) throw new Error("Imagem inválida.");
-  return { id, dataUrl: c.dataUrl, caption: "", width: c.width, height: c.height };
+  return {
+    id,
+    dataUrl: c.dataUrl,
+    caption: "",
+    width: c.width,
+    height: c.height,
+    rev: revOf(c.dataUrl),
+  };
 }
 
 /** Next free image id (img1, img2, ...) for an APG. */

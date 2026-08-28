@@ -13,6 +13,28 @@ npm run dev      # abre em http://localhost:5173
 
 Para gerar a versão de produção: `npm run build` e `npm run preview`.
 
+## Como as APGs são guardadas
+
+O acervo é **compartilhado**: fica no MongoDB Atlas, atrás das funções em `/api`
+(senha única em `APP_PASSWORD`). Três garantias que valem conhecer:
+
+- **Imagens ficam em documentos próprios** (coleção `blobs`), fora da APG. Um
+  documento de APG com várias fotos embutidas estourava o limite de 4,5 MB por
+  requisição da Vercel e o de 16 MB por documento do MongoDB — a gravação era
+  recusada e as imagens sumiam. Agora cada figura sobe sozinha, em uma
+  requisição pequena, e é baixada só quando é necessária.
+- **Cópia local em IndexedDB.** Tudo o que você escreve é gravado primeiro no
+  navegador, e as imagens ficam em cache por conteúdo. Se a internet cair, o
+  servidor der erro ou a aba fechar, o trabalho reaparece ao abrir o app e sobe
+  sozinho quando dá.
+- **Nada de edição que "volta".** Cada APG é salva sozinha, com repetição
+  automática enquanto não chega ao servidor; e a leitura periódica que traz as
+  mudanças da outra pessoa nunca sobrescreve uma APG com edição pendente, salvamento
+  em andamento, ou salvamento concluído depois que aquela leitura começou.
+
+Documentos antigos (com as imagens embutidas) são convertidos sozinhos, aos
+poucos, na primeira vez que o acervo é carregado — não é preciso fazer nada.
+
 > As fontes embutidas no PDF já estão geradas em `src/pdf/fonts/vfs.ts`. Só é
 > preciso rodar `npm run build:fonts` se quiser regenerá-las.
 
@@ -25,7 +47,9 @@ Para gerar a versão de produção: `npm run build` e `npm run preview`.
 | `src/pdf/generatePdf.ts` | Monta o documento (capas, sumários, conteúdo) com pdfmake |
 | `src/pdf/richText.ts` | Formatação inline + fallback de símbolos (→, μ, ≈, Greek…) |
 | `src/components/*` | Editor, barra de ferramentas, gerenciador de imagens, preview |
-| `src/state/*` | Estado das APGs + tema (com persistência em localStorage) |
+| `src/state/store.tsx` | Estado + sincronização (fila de gravação, mirror local, merge) |
+| `src/state/blobs.ts` | Imagens fora do documento da APG (cache por revisão) |
+| `api/*` | Funções serverless: `/api/state`, `/api/apgs`, `/api/blobs`, `/api/theme` |
 
 ## Como escrever o conteúdo
 

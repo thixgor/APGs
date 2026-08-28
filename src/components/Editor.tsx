@@ -10,7 +10,8 @@ import { ContentField } from "./ContentField";
 import { parseObjectives } from "../parser/objectivesParser";
 import { parseContent } from "../parser/contentParser";
 import { exportSingleApg } from "../utils/backup";
-import { downloadHtmlApg } from "../html/generateHtml";
+// Loaded on demand: the HTML/PDF pipeline drags in the embedded fonts.
+const htmlLib = () => import("../html/generateHtml");
 import { ExportMode } from "../utils/optimize";
 import { useToast } from "./Toast";
 
@@ -41,8 +42,19 @@ function field<K extends keyof APG>(
 }
 
 export function Editor() {
-  const { selected: apg, dispatch, state } = useApp();
+  const { selected: apg, dispatch, state, ensureImagesLoaded } = useApp();
   const notify = useToast();
+
+  // Pictures are downloaded on demand, so an export has to wait for the ones it
+  // needs — otherwise the file would come out with figures missing.
+  const exportApgFile = async (a: APG) => {
+    try {
+      await ensureImagesLoaded([a.id]);
+      exportSingleApg(a, state.theme);
+    } catch (e) {
+      notify((e as Error).message, "error");
+    }
+  };
 
   const exportApgHtml = async (a: APG) => {
     // Respect the quality mode chosen in the Export panel (defaults to equilibrado).
@@ -54,6 +66,8 @@ export function Editor() {
       /* ignore */
     }
     try {
+      await ensureImagesLoaded([a.id]);
+      const { downloadHtmlApg } = await htmlLib();
       await downloadHtmlApg(a, state.theme, mode);
       notify("Material interativo (HTML) gerado.");
     } catch (e) {
@@ -113,7 +127,7 @@ export function Editor() {
             <button
               className="btn btn-ghost btn-block"
               title="Exportar somente esta APG para um arquivo"
-              onClick={() => exportSingleApg(apg, state.theme)}
+              onClick={() => exportApgFile(apg)}
             >
               ⬆ Exportar esta APG
             </button>
@@ -181,6 +195,7 @@ export function Editor() {
           </span>
         </div>
         <ContentField
+          key={apg.id}
           value={apg.conteudoRaw}
           images={apg.images}
           apgId={apg.id}
