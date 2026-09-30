@@ -267,7 +267,7 @@
     const m = /^#([a-z-]+?)(?:-(\d+))?$/.exec(location.hash);
     const t = m ? T.findIndex(x => x.id === m[1]) : -1;
     if (t >= 0) return go(t, Math.min(+(m[2] || 0), T[t].steps.length), true);
-    go(-1, 0, true);
+    go(T.length === 1 ? 0 : -1, 0, true);
   }
   window.addEventListener('hashchange', fromHash);
   fromHash();
