@@ -137,6 +137,7 @@
   const pecaLeg = `<div class="chipset">${pins.map(([, , t], i) => `<span>${i + 1} · ${t}</span>`).join('')}</div>`;
 
   DA.topic({
+    id: 'liquor', section: 'Encéfalo e motricidade',
     short: 'Circulação do líquor',
     title: 'Circulação do <em>líquor</em>',
     card: 'Da fábrica (plexo coroide) ao ralo (seio sagital superior)',

@@ -121,6 +121,7 @@
   `);
 
   DA.topic({
+    id: 'potencial-de-acao', section: 'Sinal nervoso',
     short: 'Potencial de ação',
     title: 'Potencial de ação e <em>hiperpolarização</em>',
     card: 'Repouso, graduado, limiar, fases, refratário, condução',

@@ -121,6 +121,7 @@
   `);
 
   DA.topic({
+    id: 'arco-reflexo', section: 'Sinal nervoso',
     short: 'Arco reflexo',
     title: 'Arco reflexo: <em>mono</em> e <em>polissináptico</em>',
     card: 'Patelar, inibição recíproca, retirada e extensor cruzado',

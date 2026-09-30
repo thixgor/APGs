@@ -80,6 +80,7 @@
   `, '-40 -60 1180 860');
 
   DA.topic({
+    id: 'lobos', section: 'Encéfalo e motricidade',
     short: 'Lobos cerebrais',
     title: 'Função dos <em>lobos</em> cerebrais',
     card: 'Frontal, parietal, temporal, occipital, ínsula e límbico',

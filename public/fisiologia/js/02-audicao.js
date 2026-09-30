@@ -101,7 +101,7 @@
     <g data-s="=10"><path d="M100,640 C300,640 560,560 648,460" stroke="#ff6b5e" stroke-width="3" fill="none" class="dashflow"/>${tag(260, 660, 'eferente olivococlear medial → CCE', { fs: 14 })}</g>
     <g data-s="=3">${flow({ d: 'M820,300 C760,300 700,330 640,340', n: 4, dur: 2.5, r: 11, ion: 'k' })}</g>
     <!-- rótulos -->
-    <g data-s="2">
+    <g data-s="2-3">
       <text x="560" y="190" text-anchor="middle" class="lb" fill="#ffb567">Rampa vestibular</text>
       <text x="700" y="308" text-anchor="middle" class="lb lm">Rampa média</text>
       <text x="560" y="620" text-anchor="middle" class="lb" fill="#ffb567">Rampa timpânica</text>
@@ -244,6 +244,7 @@
   `);
 
   DA.topic({
+    id: 'audicao', section: 'Sentidos especiais',
     short: 'Transdução sonora',
     title: 'Transdução <em>sonora</em> e células ciliadas',
     card: 'Rampas, perilinfa × endolinfa, CCI e CCE, estereocílios',

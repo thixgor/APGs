@@ -103,3 +103,16 @@ escreva as marcações direto:
 - **PDF consolidado** com todas as APGs (ordenadas por período e número).
 - **PDF por período** (botões "Período N").
 - Numeração de páginas e aviso de direitos autorais em todas as páginas.
+
+## Neurofisiologia em etapas (apresentação para gravação)
+
+`public/fisiologia/index.html` é uma apresentação animada, independente do app, dividida em
+seções por conteúdo (Sinal nervoso · Encéfalo e motricidade · Sentidos especiais). Abra o
+arquivo no navegador (ou rode `npm run dev` e acesse `/fisiologia/`).
+
+- `→` / `←` avançam e voltam **dentro da seção** (nunca pulam para outro tema); `↑`/`↓` trocam de seção.
+- `L` abre a legenda completa (estruturas, funções, clínica), `G` entra no modo gravação
+  (esconde botões, legenda e cursor; `Esc` sai), `V` alterna para 9:16 (Reels), `T` oculta o texto.
+- Cada seção tem link próprio: `#liquor`, `#audicao`, `#potencial-de-acao`, `#arco-reflexo`,
+  `#lobos`, `#linguagem`, `#nucleos-da-base`, `#vias-neuronais`, `#receptores`, `#visao`, `#gustacao`
+  (acrescente `-3` para abrir direto na etapa 3).

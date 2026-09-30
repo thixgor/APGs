@@ -51,12 +51,12 @@
     const t = T[ti], st = stepsOf(t)[si], total = t.steps.length;
     let h = '';
     if (st.cover) {
-      h += `<div class="eyebrow"><span>Tema ${String(ti + 1).padStart(2, '0')} · ${total} etapas</span><span class="ln"></span></div>`;
+      h += `<div class="eyebrow"><span>${t.section} · ${total} etapas</span><span class="ln"></span></div>`;
       h += `<h2>${t.title}</h2>`;
       if (t.lede) h += `<p class="p">${t.lede}</p>`;
       h += `<ol class="roadmap">${t.steps.map(s => `<li>${s.k || s.t}</li>`).join('')}</ol>`;
     } else {
-      h += `<div class="eyebrow"><span>Etapa ${si}/${total}${st.k ? ' · ' + st.k : ''}</span><span class="ln"></span></div>`;
+      h += `<div class="eyebrow"><span>Etapa ${si}/${total}${st.k ? ' · ' + st.k : ''}${si === total ? ' · fim da seção' : ''}</span><span class="ln"></span></div>`;
       h += `<h2>${st.t}</h2>`;
       if (st.p) h += `<p class="p">${st.p}</p>`;
       if (st.keys) h += `<ul class="keys">${st.keys.map(k => `<li>${k}</li>`).join('')}</ul>`;
@@ -81,13 +81,15 @@
   /* ---------- progresso / cabeçalho ---------- */
   function renderChrome() {
     if (ti < 0) {
-      $('#tnum').textContent = 'Índice'; $('#tname').textContent = `${T.length} temas`;
+      $('#bPrev').disabled = $('#bNext').disabled = false;
+      $('#tnum').textContent = 'Índice'; $('#tname').textContent = `${T.length} seções`;
       prog.innerHTML = '';
       return;
     }
     const t = T[ti], n = t.steps.length + 1;
-    $('#tnum').textContent = String(ti + 1).padStart(2, '0');
+    $('#tnum').textContent = t.section || String(ti + 1).padStart(2, '0');
     $('#tname').textContent = t.short || t.title.replace(/<[^>]+>/g, '');
+    $('#bPrev').disabled = si === 0; $('#bNext').disabled = si === t.steps.length;
     prog.innerHTML = Array.from({ length: n }, (_, i) => `<i class="${i < si ? 'done' : i === si ? 'cur' : ''}"></i>`).join('');
   }
 
@@ -100,7 +102,7 @@
       body.innerHTML = shortcuts(); return;
     }
     const t = T[ti], st = stepsOf(t)[si];
-    $('#lgK').textContent = `Tema ${String(ti + 1).padStart(2, '0')} · etapa ${si}/${t.steps.length}`;
+    $('#lgK').textContent = `${t.short} · etapa ${si}/${t.steps.length}`;
     $('#lgT').innerHTML = st.cover ? t.title : st.t;
     let h = '';
     if (legendTab === 'step') {
@@ -123,9 +125,9 @@
   }
   function shortcuts() {
     return `<div><h4>Atalhos</h4><div class="shortcuts">
-      <kbd>→</kbd><span>próxima etapa (também Espaço, clique no palco, botão lateral do mouse)</span>
+      <kbd>→</kbd><span>próxima etapa da seção (também Espaço, clique no palco, botão lateral do mouse)</span>
       <kbd>←</kbd><span>etapa anterior</span>
-      <kbd>↑ ↓</kbd><span>tema anterior / próximo</span>
+      <kbd>↑ ↓</kbd><span>trocar de seção (as setas ← → nunca saem da seção atual)</span>
       <kbd>M</kbd><span>menu de temas</span><kbd>Home</kbd><span>índice</span>
       <kbd>L</kbd><span>abrir/fechar legenda</span>
       <kbd>T</kbd><span>mostrar/ocultar texto do palco (figura em tela cheia)</span>
@@ -137,14 +139,16 @@
   }
 
   /* ---------- capa geral ---------- */
+  const SECTIONS = [];
+  T.forEach((t, i) => { let g = SECTIONS.find(x => x.name === t.section); if (!g) SECTIONS.push(g = { name: t.section, items: [] }); g.items.push(i); });
   function cards() {
-    return T.map((t, i) => `<button class="tcard" data-go="${i}" type="button"><span class="n">${String(i + 1).padStart(2, '0')}</span><span><div class="t">${t.short || t.title}</div><div class="d">${t.card || ''}</div></span></button>`).join('');
+    return `<div class="secs">${SECTIONS.map(g => `<div class="sec"><h3>${g.name}</h3><div class="tgrid">${g.items.map(i => { const t = T[i]; return `<button class="tcard" data-go="${i}" type="button"><span class="n">${String(i + 1).padStart(2, '0')}</span><span><div class="t">${t.short || t.title}</div><div class="d">${t.card || ''}</div></span></button>`; }).join('')}</div></div>`).join('')}</div>`;
   }
   function renderCover() {
     cover.innerHTML = `<div><h1>Neuro<em>fisiologia</em><br>em etapas</h1>
       <p class="lede">Do estímulo ao comportamento, uma etapa por vez e sempre com o porquê do porquê. Avance com a seta → ou clicando no palco.</p>
       <div class="keys-help"><span><kbd>→</kbd> avança</span><span><kbd>←</kbd> volta</span><span><kbd>L</kbd> legenda</span><span><kbd>V</kbd> 9:16</span><span><kbd>G</kbd> gravar</span></div></div>
-      <div class="tgrid">${cards()}</div>`;
+      ${cards()}`;
   }
 
   /* ---------- navegação ---------- */
@@ -170,21 +174,18 @@
     }
     renderChrome(); renderLegend();
     if (!fromHash) {
-      const hsh = ti < 0 ? '' : `t${ti + 1}-e${si}`;
+      const hsh = ti < 0 ? '' : `${T[ti].id}-${si}`;
       try { history.replaceState(null, '', hsh ? '#' + hsh : location.pathname + location.search); } catch (e) { }
     }
   }
   function next() {
     if (ti < 0) return go(0, 0);
-    const n = T[ti].steps.length;
-    if (si < n) go(ti, si + 1);
-    else if (ti < T.length - 1) go(ti + 1, 0);
+    // cada seção é independente: a navegação não passa para o tema seguinte
+    if (si < T[ti].steps.length) go(ti, si + 1);
   }
   function prev() {
     if (ti < 0) return;
     if (si > 0) go(ti, si - 1);
-    else if (ti > 0) go(ti - 1, T[ti - 1].steps.length);
-    else go(-1, 0);
   }
   function topicStep(d) {
     const nt = Math.max(-1, Math.min(T.length - 1, ti + d));
@@ -263,11 +264,9 @@
   if (store.get('notext', false)) body.classList.add('notext');
   syncButtons(); fit();
   function fromHash() {
-    const m = /^#t(\d+)-e(\d+)$/.exec(location.hash);
-    if (m) {
-      const t = Math.min(T.length - 1, Math.max(0, +m[1] - 1));
-      return go(t, Math.min(+m[2], T[t].steps.length), true);
-    }
+    const m = /^#([a-z-]+?)(?:-(\d+))?$/.exec(location.hash);
+    const t = m ? T.findIndex(x => x.id === m[1]) : -1;
+    if (t >= 0) return go(t, Math.min(+(m[2] || 0), T[t].steps.length), true);
     go(-1, 0, true);
   }
   window.addEventListener('hashchange', fromHash);
