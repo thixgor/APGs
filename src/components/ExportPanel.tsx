@@ -14,12 +14,18 @@ import {
   LayoutMode,
 } from "../pdf/generatePdf";
 import { downloadHtmlBook, downloadHtmlByPeriodo } from "../html/generateHtml";
+import { downloadPrintableZip, PrintGranularity } from "../html/printHtml";
 import { ExportMode, MODE_LABEL } from "../utils/optimize";
 
 const MODE_KEY = "domineaqui.export.mode";
 const LAYOUT_KEY = "domineaqui.export.layout";
 const GENEX_KEY = "domineaqui.export.generalExercises";
 const TEMAS_KEY = "domineaqui.export.includeTemas";
+const GRAN_KEY = "domineaqui.export.printGranularity";
+const GRANULARITIES: { id: PrintGranularity; label: string; hint: string }[] = [
+  { id: "apg", label: "1 arquivo por APG", hint: "O ZIP traz uma pasta por período, com um HTML para cada APG." },
+  { id: "periodo", label: "1 arquivo por período", hint: "O ZIP traz um HTML por período, com todas as APGs dele (capa, prefácio e sumário geral)." },
+]; 
 const MODES: { id: ExportMode; hint: string }[] = [
   { id: "compacto", hint: "Menor e mais rápido. Imagens reduzidas (ideal p/ enviar)." },
   { id: "equilibrado", hint: "Recomendado. Bom equilíbrio entre nitidez e tamanho." },
@@ -100,6 +106,21 @@ export function ExportPanel() {
       /* ignore */
     }
   }, [includeTemas]);
+
+  const [granularity, setGranularity] = useState<PrintGranularity>(() => {
+    try {
+      return localStorage.getItem(GRAN_KEY) === "periodo" ? "periodo" : "apg";
+    } catch {
+      return "apg";
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(GRAN_KEY, granularity);
+    } catch {
+      /* ignore */
+    }
+  }, [granularity]);
 
   const extras = { generalExercises: generalEx };
   const objExtras = { includeTemas };
@@ -342,6 +363,85 @@ export function ExportPanel() {
                       "Gerando…",
                       () => downloadHtmlByPeriodo(apgs, p, theme, mode),
                       `Material do período ${p} gerado.`
+                    )
+                  }
+                >
+                  Período {p}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      <div className="section-title" style={{ marginTop: 18 }}>
+        HTML para imprimir (ZIP)
+      </div>
+      <div className="card">
+        <div className="hint" style={{ marginTop: 0 }}>
+          Baixa um <strong>.zip com o HTML imprimível</strong> do mesmo documento que seria gerado
+          em PDF (capas, objetivos, sumário, conteúdo, exercícios e gabarito, em páginas A4). Abra
+          o arquivo, clique em <strong>Imprimir</strong> e escolha <strong>Salvar como PDF</strong>{" "}
+          ou imprima direto. A <strong>qualidade</strong> escolhida acima controla o peso das
+          imagens.
+        </div>
+
+        <div className="hint" style={{ marginTop: 12, marginBottom: 6, fontWeight: 700, color: "var(--green-800)" }}>
+          Como dividir o ZIP
+        </div>
+        <div className="mode-row">
+          {GRANULARITIES.map((g) => (
+            <button
+              key={g.id}
+              className={`chip ${granularity === g.id ? "on" : ""}`}
+              disabled={!!busy}
+              title={g.hint}
+              onClick={() => setGranularity(g.id)}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>
+          {GRANULARITIES.find((g) => g.id === granularity)?.hint}
+        </div>
+
+        <div className="export-actions" style={{ marginTop: 12 }}>
+          <button
+            className="btn btn-primary btn-block"
+            disabled={disabled}
+            onClick={() =>
+              run(
+                "Gerando…",
+                () => downloadPrintableZip(apgs, theme, mode, { granularity, generalExercises: generalEx }),
+                "ZIP com os HTMLs imprimíveis gerado."
+              )
+            }
+          >
+            {busy ? `⏳ ${busy}` : "⬇ Baixar ZIP (todos os períodos)"}
+          </button>
+        </div>
+
+        {periodos.length > 0 && (
+          <>
+            <div className="hint" style={{ marginTop: 12 }}>
+              ZIP de somente um período:
+            </div>
+            <div className="period-pills">
+              {periodos.map((p) => (
+                <button
+                  key={p}
+                  className="chip"
+                  disabled={disabled}
+                  onClick={() =>
+                    run(
+                      "Gerando…",
+                      () =>
+                        downloadPrintableZip(apgs, theme, mode, {
+                          periodo: p,
+                          granularity,
+                          generalExercises: generalEx,
+                        }),
+                      `ZIP do período ${p} gerado.`
                     )
                   }
                 >

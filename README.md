@@ -23,6 +23,8 @@ Para gerar a versão de produção: `npm run build` e `npm run preview`.
 | `src/parser/objectivesParser.ts` | Faz o parsing do bloco de **Objetivos** colado |
 | `src/parser/contentParser.ts` | Faz o parsing do **Conteúdo** (tópicos, imagens, tabelas) |
 | `src/pdf/generatePdf.ts` | Monta o documento (capas, sumários, conteúdo) com pdfmake |
+| `src/html/printHtml.ts` | HTML **imprimível** (mesmo layout do PDF, A4) e ZIP por APG ou por período |
+| `src/utils/zip.ts` | Gerador de ZIP sem dependências (DEFLATE via `CompressionStream`) |
 | `src/pdf/richText.ts` | Formatação inline + fallback de símbolos (→, μ, ≈, Greek…) |
 | `src/components/*` | Editor, barra de ferramentas, gerenciador de imagens, preview |
 | `src/state/*` | Estado das APGs + tema (com persistência em localStorage) |
