@@ -74,7 +74,17 @@ export async function fetchState(): Promise<RemoteState> {
 export async function login(pw: string): Promise<boolean> {
   const res = await fetch("/api/state", { headers: { "x-app-password": pw } });
   if (res.status === 401) return false;
-  if (!res.ok) throw new Error(`Erro ${res.status}`);
+  if (!res.ok) {
+    // The API answers errors as { error: "..." } (e.g. missing APP_PASSWORD /
+    // MONGODB_URI, or Atlas refusing the connection) — surface that text.
+    let detail = "";
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? "";
+    } catch {
+      /* body was not JSON (e.g. the platform crashed the function) */
+    }
+    throw new Error(detail ? `Erro ${res.status}: ${detail}` : `Erro ${res.status} no servidor.`);
+  }
   setPassword(pw);
   return true;
 }
