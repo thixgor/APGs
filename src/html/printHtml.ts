@@ -530,10 +530,20 @@ table.gab td{font:700 9pt var(--sans);padding:3pt 2pt;text-align:center;border:.
 .ad.compact .ad-cta{font-size:9.5pt;margin-bottom:8pt}
 .ad-url{font:9pt var(--sans);color:#7c8c84}.ad-url a{color:var(--accent)}
 
+/* ---- per-APG PDF buttons ---- */
+.toc-row{display:flex;align-items:baseline;gap:10pt;justify-content:space-between}
+.pdf-btn{flex:none;font:700 8pt var(--sans);padding:3pt 8pt;border:1px solid var(--accent);border-radius:4pt;
+  background:#fff;color:var(--primary);cursor:pointer}
+.pdf-btn:hover{background:var(--primary);color:#fff}
+.toolbar select{font:600 13px var(--sans);padding:7px 10px;border-radius:8px;border:0;max-width:100%;
+  background:#fff;color:var(--primary-dark)}
+
 /* ---- print ---- */
 @media print{
   body{background:#fff}
-  .toolbar{display:none}
+  .toolbar,.pdf-btn{display:none}
+  /* printApg(): only the selected APG goes to the printer */
+  body[data-only] .front,body[data-only] .back,body[data-only] .apg-unit:not(.is-sel){display:none}
   .doc{width:auto;margin:0;padding:0;box-shadow:none}
   .cover{margin:0;width:210mm;height:297mm}
 }
@@ -580,6 +590,25 @@ function pageRules(apgs: APG[], theme: ThemeSettings): string {
   return rules.join("\n");
 }
 
+/** Prints ONE APG of a multi-APG file: marks its unit as selected (CSS hides the
+ *  rest while printing), borrows its title so the browser suggests it as the PDF
+ *  file name, and restores everything once the print dialog closes. */
+const PRINT_APG_JS = `
+function printApg(id){
+  var units=document.querySelectorAll('.apg-unit'),u=null,i;
+  for(i=0;i<units.length;i++){if(units[i].getAttribute('data-unit')===id){u=units[i];break;}}
+  if(!u)return;
+  var b=document.body,old=document.title;
+  u.classList.add('is-sel');b.setAttribute('data-only','1');
+  document.title=u.getAttribute('data-title')||old;
+  var done=function(){
+    b.removeAttribute('data-only');u.classList.remove('is-sel');document.title=old;
+    window.removeEventListener('afterprint',done);
+  };
+  window.addEventListener('afterprint',done);
+  setTimeout(function(){window.print();},60);
+}`;
+
 // ---------------------------------------------------------------------------
 // Document assembly
 // ---------------------------------------------------------------------------
@@ -598,37 +627,44 @@ export function buildPrintableHtml(apgs: APG[], theme: ThemeSettings, opts: Prin
 
   const parts: string[] = [];
   if (!single) {
-    parts.push(generalCover(periodos));
-    parts.push(prefaceSection());
-    parts.push(adsShowcaseSection());
+    // "front" (general cover, preface, showcase, summary) and "back" (general
+    // exercise list) are hidden when a single APG is printed on its own.
     parts.push(
+      `<div class="front">${generalCover(periodos)}${prefaceSection()}${adsShowcaseSection()}`,
       `<section class="page"><h2 class="toc-title">Sumário Geral</h2><nav class="toc">${
         list
-          .map((a) => `<a class="t1" href="#apg-${a.id}">APG ${a.numero} — ${inlineToHtml(a.titulo || "Sem título")} <span style="font-weight:400;font-size:9pt">· ${a.periodo}º período</span></a>`)
+          .map(
+            (a) => `<div class="toc-row"><a class="t1" href="#apg-${a.id}">APG ${a.numero} — ${inlineToHtml(a.titulo || "Sem título")} <span style="font-weight:400;font-size:9pt">· ${a.periodo}º período</span></a><button type="button" class="pdf-btn" data-apg="${escapeHtml(a.id)}" onclick="printApg(this.dataset.apg)">⬇ PDF desta APG</button></div>`
+          )
           .join("")
       }${
         opts.generalExercises && list.some((a) => (a.exercises ?? []).length)
           ? `<a class="t1" href="#lista-geral">Lista Geral de Exercícios</a><a class="t1" href="#gabarito-geral">Gabarito Geral</a>`
           : ""
-      }</nav></section>`
+      }</nav></section></div>`
     );
   }
 
   list.forEach((apg, idx) => {
     const toc: TocItem[] = [];
-    parts.push(apgCover(apg));
+    const unit = [apgCover(apg)];
     const content = contentSection(apg, theme, toc);
     const exercises = exercisesSection(apg, toc);
     // Everything after the cover belongs to the named page "apgN", which carries
     // this APG's running header (see pageRules).
-    parts.push(
+    unit.push(
       `<div class="apg-pages" style="page:apg${idx}">${objectivesSection(apg)}${apgToc(toc)}${content}${exercises}${singleAdSection(
         AD_PRODUCTS[idx % AD_PRODUCTS.length]
       )}</div>`
     );
+    parts.push(
+      `<div class="apg-unit" data-unit="${escapeHtml(apg.id)}" data-title="${escapeHtml(
+        `${BRAND.name} — APG ${apg.numero} — ${plain(apg.titulo) || "Sem título"}`
+      )}">${unit.join("")}</div>`
+    );
   });
 
-  if (opts.generalExercises && !single) parts.push(generalExercisesSection(list));
+  if (opts.generalExercises && !single) parts.push(`<div class="back">${generalExercisesSection(list)}</div>`);
 
   const title = single
     ? `APG ${single.numero} — ${plain(single.titulo) || "Sem título"}`
@@ -651,11 +687,19 @@ export function buildPrintableHtml(apgs: APG[], theme: ThemeSettings, opts: Prin
 <div class="toolbar">
   <b>${escapeHtml(title)}</b>
   <span class="tip">Para obter o PDF: clique em imprimir, escolha “Salvar como PDF”, papel A4, e ative “Gráficos de plano de fundo”.</span>
-  <button type="button" onclick="window.print()">🖨 Imprimir / Salvar como PDF</button>
+  ${
+    single
+      ? ""
+      : `<select id="apgPick" aria-label="Baixar o PDF de uma APG" onchange="if(this.value){printApg(this.value);this.selectedIndex=0}">
+    <option value="">⬇ PDF de uma APG só…</option>${list
+      .map((a) => `<option value="${escapeHtml(a.id)}">APG ${a.numero} — ${escapeHtml(plain(a.titulo) || "Sem título")}</option>`)
+      .join("")}</select>`
+  }
+  <button type="button" onclick="window.print()">🖨 ${single ? "Imprimir / Salvar como PDF" : "Imprimir tudo / PDF completo"}</button>
 </div>
 <main class="doc">
 ${parts.join("\n")}
-</main>
+</main>${single ? "" : `\n<script>${PRINT_APG_JS}</script>`}
 </body>
 </html>`;
 }
